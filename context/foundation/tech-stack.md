@@ -5,7 +5,7 @@ project_name: dnd-5e-merchant-generator
 hints:
   language_family: js
   team_size: solo
-  deployment_target: cloudflare-pages
+  deployment_target: cloudflare-workers
   ci_provider: github-actions
   ci_default_flow: auto-deploy-on-merge
   bootstrapper_confidence: first-class
@@ -29,8 +29,11 @@ and routing conventions, heavily represented in training data, current version-p
 which matters more than raw feature count when most of the code will be agent-written under
 deadline. Astro plus React islands suits a page that is mostly static chrome around one
 interactive table, and Tailwind covers the phone-readability requirement without a custom
-responsive layer. Cloudflare Pages is the starter's own adapter target, so deployment is the
-cheapest step in the chain; GitHub Actions auto-deploys on merge to main. The one mismatch is
+responsive layer. Cloudflare Workers is the starter's own adapter target, so deployment is the
+cheapest step in the chain; Cloudflare Workers Builds auto-deploys on merge to main.
+(Corrected 2026-09-10: `@astrojs/cloudflare` v13 dropped Cloudflare Pages support, so Workers
+is the only product reachable with the pinned adapter, and auto-deploy is owned by the platform
+rather than GitHub Actions — see `context/deployment/deploy-plan.md`.) The one mismatch is
 deliberate and known: the starter bundles Supabase auth and Postgres, which Access Control
 rules out. Merchants persist in browser storage instead; the Supabase layer stays unwired in
 v1 and becomes the ready-made path to the deferred cloud-sync feature in v2.

@@ -1,14 +1,33 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "10x-astro-starter",
+  "name": "dnd-5e-merchant-generator",
+
+  // Adapter v13 entrypoint. NOT the legacy "./dist/_worker.js/index.js" that
+  // Cloudflare's own Astro framework guide still shows -- v13 produces
+  // dist/client + dist/server, with no _worker.js at all.
   "main": "@astrojs/cloudflare/entrypoints/server",
-  "compatibility_date": "2026-05-08",
-  "compatibility_flags": ["nodejs_compat"],
+
+  // Capped at the newest date the workerd bundled with the pinned wrangler
+  // ^4.90.0 supports. 2026-08-04 (as infrastructure.md prescribes) makes
+  // miniflare refuse to start: "This Worker requires compatibility date
+  // 2026-08-04, but the newest date supported by this server binary is
+  // 2026-05-14". Runtime semantics are identical either way: nodejs_compat_v2
+  // is auto-enabled alongside nodejs_compat for dates 2024-09-23 through
+  // 2026-08-03, and nodejs_compat is listed explicitly below. Raise the date
+  // and drop the flag together, the next time wrangler is bumped.
+  "compatibility_date": "2026-05-14",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+
+  // The adapter OVERRIDES directory to "../client" in the config it generates
+  // at dist/server/wrangler.json, regardless of what is written here; the
+  // value below is kept truthful rather than load-bearing. It also injects a
+  // SESSION KV binding and an IMAGES binding that are not declared here --
+  // see dist/server/wrangler.json after a build.
   "assets": {
     "binding": "ASSETS",
-    "directory": "./dist",
-    "not_found_handling": "404-page",
+    "directory": "./dist/client",
   },
+
   "observability": {
     "enabled": true,
   },

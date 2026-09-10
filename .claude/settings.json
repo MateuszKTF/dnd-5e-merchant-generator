@@ -20,7 +20,13 @@
       "Bash(curl *)",
       "Bash(wget *)",
       "Bash(git push *)",
-      "Bash(git push)"
+      "Bash(git push)",
+      "Bash(npx wrangler deploy*)",
+      "Bash(npx wrangler versions deploy*)",
+      "Bash(npx wrangler delete*)",
+      "Bash(npx wrangler secret*)",
+      "Bash(npx wrangler login*)",
+      "Bash(npx wrangler logout*)"
     ],
     "deny": [
       "Bash(rm -rf *)"
