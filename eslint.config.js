@@ -68,8 +68,15 @@ const astroConfig = tseslint.config({
   },
 });
 
+// Build-time Node scripts are not app source: they are not in the tsconfig project,
+// they run on Node rather than in workerd, and they deliberately handle untyped JSON
+// fetched from an external dataset. Type-checked lint rules do not apply. Prettier
+// still formats them via lint-staged.
+const nodeScriptsIgnore = { ignores: ["scripts/**"] };
+
 export default tseslint.config(
   includeIgnoreFile(gitignorePath),
+  nodeScriptsIgnore,
   baseConfig,
   reactConfig,
   eslintPluginAstro.configs["flat/recommended"],
