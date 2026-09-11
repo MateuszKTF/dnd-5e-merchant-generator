@@ -639,16 +639,16 @@ both.
 
 #### Automated
 
-- [x] 3.1 Unit tests still pass: `npm test`
-- [x] 3.2 Type checking passes: `npx astro check`
-- [x] 3.3 Production build succeeds: `npm run build`
-- [x] 3.4 Linting passes: `npm run lint`
+- [x] 3.1 Unit tests still pass: `npm test` — 7839d6e
+- [x] 3.2 Type checking passes: `npx astro check` — 7839d6e
+- [x] 3.3 Production build succeeds: `npm run build` — 7839d6e
+- [x] 3.4 Linting passes: `npm run lint` — 7839d6e
 
 #### Manual
 
-- [x] 3.5 25-row list at 360 px has no horizontal scroll and needs no zooming
-- [x] 3.6 Longest catalog item names wrap cleanly
-- [x] 3.7 Sub-gold prices read as sp/cp and none render as `0`
-- [x] 3.8 Controls and button comfortably tappable on a phone
-- [x] 3.9 SRD attribution and licence links visible, correct, and not crowding the table
-- [x] 3.10 Verified on a real phone-sized viewport, not desktop emulation
+- [x] 3.5 25-row list at 360 px has no horizontal scroll and needs no zooming — 7839d6e
+- [x] 3.6 Longest catalog item names wrap cleanly — 7839d6e
+- [x] 3.7 Sub-gold prices read as sp/cp and none render as `0` — 7839d6e
+- [x] 3.8 Controls and button comfortably tappable on a phone — 7839d6e
+- [x] 3.9 SRD attribution and licence links visible, correct, and not crowding the table — 7839d6e
+- [x] 3.10 Verified on a real phone-sized viewport, not desktop emulation — 7839d6e
