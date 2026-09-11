@@ -1,8 +1,15 @@
 ---
-import Welcome from "@/components/Welcome.astro";
+import MerchantGenerator from "@/components/MerchantGenerator";
 import Layout from "@/layouts/Layout.astro";
+
+// Every page is prerendered (AGENTS.md hard rule): `output: "server"` stays for
+// the deploy pipeline, but nothing user-facing renders per request. Verify after
+// a build that this route appears as HTML under `dist/client/`.
+export const prerender = true;
 ---
 
 <Layout>
-  <Welcome />
+  <!-- client:load, not client:visible: the generator IS the page, so the first
+       interaction must not wait on an intersection observer. -->
+  <MerchantGenerator client:load />
 </Layout>

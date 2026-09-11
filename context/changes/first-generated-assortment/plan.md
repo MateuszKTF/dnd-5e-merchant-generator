@@ -605,35 +605,35 @@ both.
 
 #### Automated
 
-- [x] 1.1 Unit tests pass: `npm test`
-- [x] 1.2 Type checking passes: `npx astro check`
-- [x] 1.3 Production build succeeds: `npm run build`
-- [x] 1.4 Linting passes: `npm run lint`
+- [x] 1.1 Unit tests pass: `npm test` — 020c671
+- [x] 1.2 Type checking passes: `npx astro check` — 020c671
+- [x] 1.3 Production build succeeds: `npm run build` — 020c671
+- [x] 1.4 Linting passes: `npm run lint` — 020c671
 
 #### Manual
 
-- [x] 1.5 `WEALTH_CONFIG` makes the three wealth levels' behaviour obvious on its own
-- [x] 1.6 Scratch run of all 12 (category, wealth) pairs produces plausible assortments
+- [x] 1.5 `WEALTH_CONFIG` makes the three wealth levels' behaviour obvious on its own — 020c671
+- [x] 1.6 Scratch run of all 12 (category, wealth) pairs produces plausible assortments — 020c671
 
 ### Phase 2: Visible generator
 
 #### Automated
 
-- [ ] 2.1 Unit tests still pass: `npm test`
-- [ ] 2.2 Type checking passes: `npx astro check`
-- [ ] 2.3 Production build succeeds: `npm run build`
-- [ ] 2.4 Route is prerendered: `index.html` exists under `dist/client/`
-- [ ] 2.5 No dangling references to deleted components in `src`
-- [ ] 2.6 Linting passes: `npm run lint`
+- [x] 2.1 Unit tests still pass: `npm test`
+- [x] 2.2 Type checking passes: `npx astro check`
+- [x] 2.3 Production build succeeds: `npm run build`
+- [x] 2.4 Route is prerendered: `index.html` exists under `dist/client/`
+- [x] 2.5 No dangling references to deleted components in `src`
+- [x] 2.6 Linting passes: `npm run lint`
 
 #### Manual
 
-- [ ] 2.7 Category + wealth + "Stwórz" shows a 10–25 row table well inside 5 s
-- [ ] 2.8 Pressing "Stwórz" again produces a visibly different list
-- [ ] 2.9 Wealth visibly changes list length, rare share and price level
-- [ ] 2.10 No repeated item name within a single list
-- [ ] 2.11 Sensible empty state before the first click
-- [ ] 2.12 Starter hero and `/auth/signin` links gone from the page
+- [x] 2.7 Category + wealth + "Stwórz" shows a 10–25 row table well inside 5 s
+- [x] 2.8 Pressing "Stwórz" again produces a visibly different list
+- [x] 2.9 Wealth visibly changes list length, rare share and price level
+- [x] 2.10 No repeated item name within a single list
+- [x] 2.11 Sensible empty state before the first click
+- [x] 2.12 Starter hero and `/auth/signin` links gone from the page
 
 ### Phase 3: Phone readability and attribution
 
