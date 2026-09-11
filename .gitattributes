@@ -1,0 +1,15 @@
+# Normalize line endings so `npm run lint` is a real gate on every platform.
+#
+# Git stores LF and `core.autocrlf=true` was checking out CRLF, which made
+# `npm run lint` report ~1000 `Delete ␍` errors on Windows and zero on CI.
+# See AGENTS.md; this file is what makes that note obsolete.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
