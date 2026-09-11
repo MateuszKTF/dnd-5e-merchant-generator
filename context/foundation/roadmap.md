@@ -63,7 +63,7 @@ stało przed nim.
 | ---- | --------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------- | -------- |
 | F-01 | `merchant-storage-contract` | (foundation) kontrakt kupca i zapisu w przeglądarce, z jawnym zachowaniem przy awarii magazynu | —                      | Guardrails (§ Success Criteria), Access Control, FR-009                         | planning |
 | S-01 | `first-generated-assortment` | wybrać kategorię i zamożność, kliknąć „Stwórz" i zobaczyć tabelę 10–25 pozycji                 | —                      | US-01, FR-001, FR-002, FR-003, FR-004, FR-005, FR-007, NFR (czytelność na telefonie) | in-progress |
-| S-02 | `manual-item-corrections`   | skorygować cenę lub ilość pozycji i przegenerować listę bez cichej utraty tych korekt          | S-01                   | FR-006, FR-008                                                                  | planning |
+| S-02 | `manual-item-corrections`   | skorygować cenę lub ilość pozycji i przegenerować listę bez cichej utraty tych korekt          | S-01                   | FR-006, FR-008                                                                  | in-progress |
 | S-03 | `last-merchant-persists`    | zamknąć kartę w środku sesji, wrócić i zastać ostatniego kupca; oznaczyć go jako trwałego       | F-01, S-01, S-02       | US-03, FR-009                                                                   | planning |
 | S-04 | `saved-merchants-library`   | odnaleźć zapisanego kupca na liście, otworzyć go i zmienić mu nazwę                            | F-01, S-03             | US-02, FR-010, FR-011                                                           | planning |
 | S-05 | `merchant-search-and-delete` | wyszukać kupca po nazwie i usunąć niepotrzebnego, gdy lista urośnie przez miesiące kampanii    | S-04                   | US-02, FR-012, FR-013                                                           | planning |
@@ -193,7 +193,7 @@ od nowa.
   z edycją celowo: chroni jedyną pracę MG, której narzędzie nie umie odtworzyć, i nie ma
   sensu bez niej. Jeśli zakres trzeba będzie ciąć, to jest pierwszy kandydat do rozmowy
   — patrz Open Roadmap Questions #1.
-- **Status:** planning
+- **Status:** in-progress
 
 ### S-03: Ostatni kupiec wraca sam
 
