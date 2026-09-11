@@ -1,0 +1,180 @@
+/**
+ * The session rules: what a reload restores, and what the save button is
+ * allowed to say.
+ *
+ * Pure — no React, no storage access, nothing touching a global at module
+ * scope. The island that consumes these rules (`MerchantGenerator.tsx`) is
+ * unreachable by the test harness, which globs `.ts` only and runs without
+ * jsdom, so every decision that can be *wrong as a rule* lives here where a
+ * test can reach it. Only the effects and the `storage` listener stay in the
+ * component, covered by manual steps. F-01 (`merchant-storage.ts`) and S-02
+ * (`corrections.ts`) are split the same way for the same reason.
+ */
+
+import { CATEGORIES, WEALTH_LEVELS, type CategoryId, type Wealth } from "@/data/items";
+
+import type { Merchant } from "./merchant";
+import type { StorageDocument } from "./merchant-storage";
+
+/**
+ * Is this string a category this build knows?
+ *
+ * A predicate rather than a comparison because the value arrives from
+ * `JSON.parse`: the type says `CategoryId`, the bytes on disk say whatever a
+ * newer build — or a hand edit — put there. Narrowing is what lets the caller
+ * hand the result straight to a `CategoryId` slot without an assertion.
+ */
+export function isKnownCategory(value: string): value is CategoryId {
+  return CATEGORIES.some((entry) => entry.id === value);
+}
+
+/** As {@link isKnownCategory}, for the settlement wealth control. */
+export function isKnownWealth(value: string): value is Wealth {
+  return WEALTH_LEVELS.some((entry) => entry.id === value);
+}
+
+/** What a reload found, already translated into island state. */
+export interface RestoredSession {
+  /**
+   * The stored merchant, whole and unmodified — rows and corrections included,
+   * and **returned even when a control had to be reset** (see below).
+   */
+  merchant: Merchant;
+  /** The category control's value: the merchant's own, or the default. */
+  category: CategoryId;
+  /** The wealth control's value: the merchant's own, or the default. */
+  wealth: Wealth;
+  /** Seeded from the restored rows, so the first Generate draws something else. */
+  recentIds: string[];
+  /** True when {@link category} is the default because the stored one is unknown. */
+  categoryWasReset: boolean;
+  /** True when {@link wealth} is the default because the stored one is unknown. */
+  wealthWasReset: boolean;
+}
+
+/**
+ * The last generated merchant, ready to become island state — or `null` when
+ * there is nothing to bring back.
+ *
+ * **A stale enum degrades the controls, never the rows.** If a stored
+ * `category` or `wealth` is no longer a member of `src/data/items.ts`, only the
+ * matching `select` falls back to the first entry; `merchant` comes back
+ * complete either way. That is affordable precisely because F-01 denormalizes
+ * `name` and `rarity` into every row, so the table renders without consulting
+ * the catalog at all — a merchant the GM is mid-session with must not vanish
+ * because a category was renamed under it.
+ *
+ * **Read-only and idempotent.** It writes nothing and depends on nothing but
+ * its argument, so the mount effect can run it twice under dev StrictMode
+ * without a guarding ref.
+ *
+ * The `rows` check is not redundant with F-01's validation: `readDocument`
+ * validates the *document* (`schemaVersion`, `saved`, the presence of a
+ * `transient` object) and deliberately does not walk into the merchant. A
+ * hand-edited `"transient": {}` therefore reads back as `ok`, and mapping over
+ * an absent `rows` would throw inside a mount effect — blanking the only page
+ * the product has. Treating it as nothing to restore shows the ordinary empty
+ * state instead.
+ */
+export function restoreFromDocument(doc: StorageDocument): RestoredSession | null {
+  const merchant = doc.transient;
+  if (merchant === null || !Array.isArray(merchant.rows)) {
+    return null;
+  }
+
+  const categoryWasReset = !isKnownCategory(merchant.category);
+  const wealthWasReset = !isKnownWealth(merchant.wealth);
+
+  return {
+    merchant,
+    category: categoryWasReset ? CATEGORIES[0].id : merchant.category,
+    wealth: wealthWasReset ? WEALTH_LEVELS[0].id : merchant.wealth,
+    // The recency bias is S-01 state and is not persisted (the format is
+    // forward-only, and a UI nicety does not earn a stored field). Reseeding it
+    // from the rows the GM is looking at costs nothing and closes the case the
+    // bias exists for: the first Generate after reopening is the one most
+    // likely to hand back the list already on screen.
+    recentIds: merchant.rows.map((row) => row.itemId),
+    categoryWasReset,
+    wealthWasReset,
+  };
+}
+
+/**
+ * What the save button may claim.
+ *
+ * - `unavailable` — nothing has been generated yet; there is no merchant to save.
+ * - `stood-down` — persistence is refusing writes for the rest of this page
+ *   load. Renders like `unavailable`, but is a **different state because it is
+ *   absorbing**: a later Generate must not re-arm a button whose press cannot
+ *   succeed. F-01 latches read-only on `future-version` — a document a newer
+ *   build owns — and inviting a save there invites the one write that would
+ *   destroy the data the latch exists to protect.
+ * - `armed` — a merchant exists and has not been saved.
+ * - `saved` — the last press promoted successfully, and nothing has changed since.
+ *
+ * The asymmetry is deliberate: a **disabled or full** store does not stand
+ * persistence down. Those mean *the write will fail*, which is worth letting
+ * the GM discover by pressing Save and reading the notice — the condition is
+ * recoverable (re-enable site data, free some space) and hiding it behind a
+ * dead control hides the remedy with it. `future-version` means *do not write
+ * at all*, which is not recoverable from inside this build.
+ */
+export const SAVE_STATES = ["unavailable", "stood-down", "armed", "saved"] as const;
+export type SaveState = (typeof SAVE_STATES)[number];
+
+/**
+ * Everything that can move the save button.
+ *
+ * `promoted` and `promote-failed` are separate because `promoteTransient`
+ * answers with a status instead of throwing, and collapsing the two is the one
+ * mistake this module exists to make impossible: a green "Zapisano" over a
+ * merchant that was never written is the PRD's heaviest guardrail violation
+ * wearing a checkmark.
+ */
+export const SAVE_EVENTS = [
+  "generated",
+  "corrected",
+  "restored",
+  "promoted",
+  "promote-failed",
+  "persistence-off",
+] as const;
+export type SaveEvent = (typeof SAVE_EVENTS)[number];
+
+// Cell aliases, so each row of the table below fits on one line: `A` armed,
+// `S` saved, `U` unavailable, `D` stood-down.
+const A = "armed";
+const S = "saved";
+const U = "unavailable";
+const D = "stood-down";
+
+/**
+ * The transition table. Rows are the current state, columns the event.
+ *
+ * Two cells carry the weight and are meant to be checkable by eye:
+ *
+ * - `armed` x `promote-failed` is **`A`, never `S`** — a promote that failed
+ *   leaves the button armed so the GM can try again. No cell in the
+ *   `promote-failed` column reaches `S` from a state that was not already
+ *   `saved`, so a failed save can never present as a save that happened.
+ * - the `stood-down` row is `D` throughout — nothing leaves it, which is the
+ *   absorbing property the `future-version` latch depends on.
+ *
+ * Unreachable cells are filled conservatively rather than left to a fallback:
+ * `promoted` from `unavailable` stays `U`, because a promote with nothing
+ * generated is a bug, not a save. Keeping the table total is what lets
+ * {@link nextSaveState} be a lookup with no default branch to get wrong.
+ */
+// prettier-ignore
+const SAVE_TRANSITIONS: Record<SaveState, Record<SaveEvent, SaveState>> = {
+  unavailable:  { generated: A, corrected: A, restored: A, promoted: U, "promote-failed": U, "persistence-off": D },
+  "stood-down": { generated: D, corrected: D, restored: D, promoted: D, "promote-failed": D, "persistence-off": D },
+  armed:        { generated: A, corrected: A, restored: A, promoted: S, "promote-failed": A, "persistence-off": D },
+  saved:        { generated: A, corrected: A, restored: A, promoted: S, "promote-failed": S, "persistence-off": D },
+};
+
+/** Apply one event to the save button's state. Total — every cell is filled. */
+export function nextSaveState(current: SaveState, event: SaveEvent): SaveState {
+  return SAVE_TRANSITIONS[current][event];
+}
