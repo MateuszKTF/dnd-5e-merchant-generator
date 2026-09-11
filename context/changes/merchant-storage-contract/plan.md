@@ -611,10 +611,10 @@ so Phase 3's below-version branch has no live case in v1.
 
 #### Automated
 
-- [x] 3.1 Unit tests pass including all failure paths: `npm test`
-- [x] 3.2 Type checking passes: `npx astro check`
-- [x] 3.3 Production build succeeds: `npm run build`
-- [x] 3.4 Linting passes: `npm run lint`
+- [x] 3.1 Unit tests pass including all failure paths: `npm test` — 96f97dd
+- [x] 3.2 Type checking passes: `npx astro check` — 96f97dd
+- [x] 3.3 Production build succeeds: `npm run build` — 96f97dd
+- [x] 3.4 Linting passes: `npm run lint` — 96f97dd
 
 #### Manual
 
