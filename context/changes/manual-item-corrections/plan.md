@@ -548,10 +548,10 @@ session-only affordance. `CorrectionMap` keyed by `itemId` is the shape F-01 mir
 
 #### Automated
 
-- [x] 3.1 Unit tests still pass: `npm test`
-- [x] 3.2 Type checking passes: `npx astro check`
-- [x] 3.3 Production build succeeds: `npm run build`
-- [x] 3.4 Linting passes: `npm run lint`
+- [x] 3.1 Unit tests still pass: `npm test` — 76a2b22
+- [x] 3.2 Type checking passes: `npx astro check` — 76a2b22
+- [x] 3.3 Production build succeeds: `npm run build` — 76a2b22
+- [x] 3.4 Linting passes: `npm run lint` — 76a2b22
 
 #### Manual
 
