@@ -1,10 +1,11 @@
 import { useState } from "react";
 
+import ConfirmDialog from "@/components/ConfirmDialog";
 import MerchantTable from "@/components/MerchantTable";
 import { Button } from "@/components/ui/button";
 import { CATEGORIES, WEALTH_LEVELS, type CategoryId, type Wealth } from "@/data/items";
 import { AssortmentPoolError, generateAssortment, type AssortmentRow } from "@/lib/assortment";
-import type { Correction, CorrectionMap } from "@/lib/corrections";
+import { hasCorrections, type Correction, type CorrectionMap } from "@/lib/corrections";
 
 /**
  * The generator: two choices, one button, one table.
@@ -33,7 +34,40 @@ export default function MerchantGenerator() {
 
   const [error, setError] = useState<string | null>(null);
 
+  // The guardrail. Open means a draw is pending the GM's answer; nothing has
+  // been replaced yet.
+  const [confirmOpen, setConfirmOpen] = useState(false);
+
+  /**
+   * Every path into a row replacement goes through here.
+   *
+   * The guard is on the Generate *action*, not on whether category or wealth
+   * changed. That is knowingly broader than FR-006's literal "dla tej samej
+   * kategorii": changing category and then generating destroys corrections just
+   * as thoroughly, and the guardrail does not distinguish.
+   */
   function handleGenerate() {
+    if (rows !== null && hasCorrections(rows, corrections)) {
+      setConfirmOpen(true);
+      return;
+    }
+
+    draw();
+  }
+
+  function handleConfirmRegenerate() {
+    setConfirmOpen(false);
+    draw();
+  }
+
+  // Changes nothing: not the rows, not the overlay, not category or wealth, and
+  // not `recentIds` — the recency bias belongs to a draw that actually happened,
+  // so a cancelled Generate must leave the next one just as biased.
+  function handleCancelRegenerate() {
+    setConfirmOpen(false);
+  }
+
+  function draw() {
     try {
       const next = generateAssortment(category, wealth, { recentIds });
 
@@ -153,6 +187,17 @@ export default function MerchantGenerator() {
       {error === null && rows !== null && (
         <MerchantTable rows={rows} corrections={corrections} onCorrect={handleCorrect} />
       )}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title="Odrzucić ręczne korekty?"
+        body="Masz ręcznie poprawione ceny lub ilości. Nowy asortyment skasuje te poprawki — nie da się ich odtworzyć."
+        confirmLabel="Stwórz mimo to"
+        cancelLabel="Anuluj"
+        destructive
+        onConfirm={handleConfirmRegenerate}
+        onCancel={handleCancelRegenerate}
+      />
     </main>
   );
 }
