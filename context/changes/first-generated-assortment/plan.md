@@ -619,36 +619,36 @@ both.
 
 #### Automated
 
-- [x] 2.1 Unit tests still pass: `npm test`
-- [x] 2.2 Type checking passes: `npx astro check`
-- [x] 2.3 Production build succeeds: `npm run build`
-- [x] 2.4 Route is prerendered: `index.html` exists under `dist/client/`
-- [x] 2.5 No dangling references to deleted components in `src`
-- [x] 2.6 Linting passes: `npm run lint`
+- [x] 2.1 Unit tests still pass: `npm test` — e030b42
+- [x] 2.2 Type checking passes: `npx astro check` — e030b42
+- [x] 2.3 Production build succeeds: `npm run build` — e030b42
+- [x] 2.4 Route is prerendered: `index.html` exists under `dist/client/` — e030b42
+- [x] 2.5 No dangling references to deleted components in `src` — e030b42
+- [x] 2.6 Linting passes: `npm run lint` — e030b42
 
 #### Manual
 
-- [x] 2.7 Category + wealth + "Stwórz" shows a 10–25 row table well inside 5 s
-- [x] 2.8 Pressing "Stwórz" again produces a visibly different list
-- [x] 2.9 Wealth visibly changes list length, rare share and price level
-- [x] 2.10 No repeated item name within a single list
-- [x] 2.11 Sensible empty state before the first click
-- [x] 2.12 Starter hero and `/auth/signin` links gone from the page
+- [x] 2.7 Category + wealth + "Stwórz" shows a 10–25 row table well inside 5 s — e030b42
+- [x] 2.8 Pressing "Stwórz" again produces a visibly different list — e030b42
+- [x] 2.9 Wealth visibly changes list length, rare share and price level — e030b42
+- [x] 2.10 No repeated item name within a single list — e030b42
+- [x] 2.11 Sensible empty state before the first click — e030b42
+- [x] 2.12 Starter hero and `/auth/signin` links gone from the page — e030b42
 
 ### Phase 3: Phone readability and attribution
 
 #### Automated
 
-- [ ] 3.1 Unit tests still pass: `npm test`
-- [ ] 3.2 Type checking passes: `npx astro check`
-- [ ] 3.3 Production build succeeds: `npm run build`
-- [ ] 3.4 Linting passes: `npm run lint`
+- [x] 3.1 Unit tests still pass: `npm test`
+- [x] 3.2 Type checking passes: `npx astro check`
+- [x] 3.3 Production build succeeds: `npm run build`
+- [x] 3.4 Linting passes: `npm run lint`
 
 #### Manual
 
-- [ ] 3.5 25-row list at 360 px has no horizontal scroll and needs no zooming
-- [ ] 3.6 Longest catalog item names wrap cleanly
-- [ ] 3.7 Sub-gold prices read as sp/cp and none render as `0`
-- [ ] 3.8 Controls and button comfortably tappable on a phone
-- [ ] 3.9 SRD attribution and licence links visible, correct, and not crowding the table
-- [ ] 3.10 Verified on a real phone-sized viewport, not desktop emulation
+- [x] 3.5 25-row list at 360 px has no horizontal scroll and needs no zooming
+- [x] 3.6 Longest catalog item names wrap cleanly
+- [x] 3.7 Sub-gold prices read as sp/cp and none render as `0`
+- [x] 3.8 Controls and button comfortably tappable on a phone
+- [x] 3.9 SRD attribution and licence links visible, correct, and not crowding the table
+- [x] 3.10 Verified on a real phone-sized viewport, not desktop emulation

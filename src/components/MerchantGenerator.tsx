@@ -59,46 +59,69 @@ export default function MerchantGenerator() {
   }
 
   return (
-    <main>
-      <h1>Generator kupca D&amp;D 5e</h1>
+    // px-4 keeps a gutter at 360 px; the max-width stops the table stretching
+    // into unreadable line lengths on a laptop.
+    <main className="mx-auto w-full max-w-3xl px-4 py-6">
+      <h1 className="text-xl font-semibold">Generator kupca D&amp;D 5e</h1>
 
-      <div>
-        <label htmlFor="category">Kategoria</label>
-        <select
-          id="category"
-          value={category}
-          onChange={(e) => {
-            handleCategoryChange(e.target.value);
-          }}
-        >
-          {CATEGORIES.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+      {/* Stacked on a phone, inline once there is room — one markup path,
+          the breakpoint does the work. */}
+      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+        <div className="flex flex-col gap-1">
+          <label htmlFor="category" className="text-sm text-neutral-600">
+            Kategoria
+          </label>
+          <select
+            id="category"
+            value={category}
+            onChange={(e) => {
+              handleCategoryChange(e.target.value);
+            }}
+            // h-11 keeps the tap target comfortable on a phone.
+            className="h-11 rounded-md border border-neutral-300 bg-white px-3"
+          >
+            {CATEGORIES.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
-        <label htmlFor="wealth">Zamożność osady</label>
-        <select
-          id="wealth"
-          value={wealth}
-          onChange={(e) => {
-            handleWealthChange(e.target.value);
-          }}
-        >
-          {WEALTH_LEVELS.map((option) => (
-            <option key={option.id} value={option.id}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+        <div className="flex flex-col gap-1">
+          <label htmlFor="wealth" className="text-sm text-neutral-600">
+            Zamożność osady
+          </label>
+          <select
+            id="wealth"
+            value={wealth}
+            onChange={(e) => {
+              handleWealthChange(e.target.value);
+            }}
+            className="h-11 rounded-md border border-neutral-300 bg-white px-3"
+          >
+            {WEALTH_LEVELS.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
 
-        <Button onClick={handleGenerate}>Stwórz</Button>
+        <Button onClick={handleGenerate} className="h-11 px-6">
+          Stwórz
+        </Button>
       </div>
 
-      {error !== null && <p role="alert">{error}</p>}
+      {error !== null && (
+        <p role="alert" className="mt-6 text-sm text-red-700">
+          {error}
+        </p>
+      )}
 
-      {error === null && rows === null && <p>Wybierz kategorię i zamożność osady, a potem kliknij „Stwórz”.</p>}
+      {error === null && rows === null && (
+        <p className="mt-6 text-neutral-600">Wybierz kategorię i zamożność osady, a potem kliknij „Stwórz”.</p>
+      )}
 
       {error === null && rows !== null && <MerchantTable rows={rows} />}
     </main>
