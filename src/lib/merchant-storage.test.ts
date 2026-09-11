@@ -8,6 +8,7 @@ import {
   putTransient,
   readDocument,
   renameMerchant,
+  resetReadOnlyLatch,
   updateSavedMerchant,
   writeDocument,
   SCHEMA_VERSION,
@@ -42,10 +43,21 @@ function storedBytes(store: StorageFake): string | null {
   return store.entries.get(STORAGE_KEY) ?? null;
 }
 
+const CORRUPT_PREFIX = `${STORAGE_KEY}:corrupt:`;
+
+/** Keys the module parked corrupt payloads under. */
+function corruptKeys(fake: StorageFake): string[] {
+  return [...fake.entries.keys()].filter((key) => key.startsWith(CORRUPT_PREFIX));
+}
+
 let store: StorageFake;
 
 beforeEach(() => {
   store = createStorageFake();
+  // Vitest isolates module state per file, not per test, so a test that latches
+  // the read-only flag would otherwise refuse every write in every test after
+  // it — and the suite would silently become order-dependent.
+  resetReadOnlyLatch();
 });
 
 describe("readDocument", () => {
@@ -291,5 +303,208 @@ describe("deleteMerchant", () => {
 
     expect(deleteMerchant("nie-ma-takiego", store)).toEqual({ status: "not-found" });
     expect(storedBytes(store)).toBe(before);
+  });
+});
+
+describe("storage unavailable", () => {
+  it("reads as unavailable when the store refuses writes — Safari private mode", () => {
+    // The store exists and reads fine; only `setItem` throws. Feature detection
+    // would call this available and then lose the GM's data, which is why the
+    // module probes by actually writing.
+    const disabled = createStorageFake({ throwOn: true });
+
+    expect(readDocument(disabled)).toEqual({ status: "unavailable" });
+  });
+
+  it("writes as unavailable rather than throwing", () => {
+    const disabled = createStorageFake({ throwOn: true });
+
+    expect(putTransient(makeMerchant(), disabled)).toEqual({ status: "unavailable" });
+    expect(writeDocument({ schemaVersion: SCHEMA_VERSION, transient: null, saved: [] }, disabled)).toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("reads as unavailable when even reading is refused — site data blocked", () => {
+    const blocked = createStorageFake({ throwOnGet: true });
+
+    expect(readDocument(blocked)).toEqual({ status: "unavailable" });
+  });
+
+  it("reports unavailable through every operation, so none of them throw", () => {
+    const disabled = createStorageFake({ throwOn: true });
+
+    expect(listSaved(disabled)).toEqual({ status: "unavailable" });
+    expect(promoteTransient(disabled)).toEqual({ status: "unavailable" });
+    expect(renameMerchant("x", "y", disabled)).toEqual({ status: "unavailable" });
+    expect(deleteMerchant("x", disabled)).toEqual({ status: "unavailable" });
+    expect(updateSavedMerchant("x", { rows: [], corrections: {} }, disabled)).toEqual({ status: "unavailable" });
+  });
+});
+
+describe("quota exhausted", () => {
+  function fullStoreHolding(doc: StorageDocument): StorageFake {
+    return createStorageFake({ seed: { [STORAGE_KEY]: JSON.stringify(doc) }, quotaExceededOn: true });
+  }
+
+  it("still reads — a full store is not an unreadable one", () => {
+    const doc: StorageDocument = { schemaVersion: SCHEMA_VERSION, transient: makeMerchant(), saved: [] };
+    const full = fullStoreHolding(doc);
+
+    expect(readDocument(full)).toEqual({ status: "ok", doc });
+  });
+
+  it("reports quota-exceeded on write and leaves the prior document intact", () => {
+    const doc: StorageDocument = {
+      schemaVersion: SCHEMA_VERSION,
+      transient: makeMerchant({ name: "Ocalony" }),
+      saved: [],
+    };
+    const full = fullStoreHolding(doc);
+    const before = storedBytes(full);
+
+    expect(putTransient(makeMerchant({ name: "Nowy" }), full)).toEqual({ status: "quota-exceeded" });
+    expect(storedBytes(full)).toBe(before);
+  });
+
+  it("distinguishes a full store from a disabled one", () => {
+    const full = createStorageFake({ quotaExceededOn: true });
+    const disabled = createStorageFake({ throwOn: true });
+
+    expect(putTransient(makeMerchant(), full)).toEqual({ status: "quota-exceeded" });
+    expect(putTransient(makeMerchant(), disabled)).toEqual({ status: "unavailable" });
+  });
+});
+
+describe("corrupt payload", () => {
+  const GARBAGE = "{{{ to nie jest JSON";
+
+  it("quarantines unparseable bytes verbatim and leaves a valid document behind", () => {
+    const corrupt = createStorageFake({ seed: { [STORAGE_KEY]: GARBAGE } });
+
+    expect(readDocument(corrupt)).toEqual({ status: "quarantined" });
+
+    const parked = corruptKeys(corrupt);
+    expect(parked).toHaveLength(1);
+    expect(corrupt.entries.get(parked[0])).toBe(GARBAGE);
+
+    const recovered = readDocument(corrupt);
+    expect(recovered).toEqual({ status: "ok", doc: { schemaVersion: SCHEMA_VERSION, transient: null, saved: [] } });
+  });
+
+  it("treats a document that parses but is structurally invalid as corrupt, not empty", () => {
+    const payloads = [
+      '{"saved":"nie-tablica","transient":null,"schemaVersion":1}',
+      '{"transient":null,"saved":[]}',
+      '{"schemaVersion":1,"saved":[]}',
+      "[]",
+      "null",
+      "42",
+    ];
+
+    for (const payload of payloads) {
+      const invalid = createStorageFake({ seed: { [STORAGE_KEY]: payload } });
+
+      expect(readDocument(invalid)).toEqual({ status: "quarantined" });
+      expect(corruptKeys(invalid)).toHaveLength(1);
+    }
+  });
+
+  it("leaves the corrupt bytes strictly alone when they cannot be copied aside", () => {
+    // The quarantine copy is a second full copy of the payload, so a store too
+    // full to hold it is exactly the case where wiping the original would
+    // destroy the only remaining data. Nothing may be touched here.
+    const full = createStorageFake({
+      seed: { [STORAGE_KEY]: GARBAGE },
+      quotaExceededOn: (key) => key.startsWith(CORRUPT_PREFIX),
+    });
+
+    expect(readDocument(full)).toEqual({ status: "unreadable" });
+    expect(storedBytes(full)).toBe(GARBAGE);
+    expect(corruptKeys(full)).toEqual([]);
+  });
+
+  it("refuses every subsequent write once a payload was left unreadable", () => {
+    const full = createStorageFake({
+      seed: { [STORAGE_KEY]: GARBAGE },
+      quotaExceededOn: (key) => key.startsWith(CORRUPT_PREFIX),
+    });
+
+    expect(readDocument(full)).toEqual({ status: "unreadable" });
+
+    expect(putTransient(makeMerchant(), full)).toEqual({ status: "read-only" });
+    expect(promoteTransient(full)).toEqual({ status: "read-only" });
+    expect(deleteMerchant("x", full)).toEqual({ status: "read-only" });
+    expect(storedBytes(full)).toBe(GARBAGE);
+  });
+
+  it("never reclaims a quarantined payload on its own", () => {
+    const corrupt = createStorageFake({ seed: { [STORAGE_KEY]: GARBAGE } });
+    readDocument(corrupt);
+
+    putTransient(makeMerchant(), corrupt);
+    promoteTransient(corrupt);
+    readDocument(corrupt);
+
+    expect(corruptKeys(corrupt)).toHaveLength(1);
+  });
+});
+
+describe("newer schema version", () => {
+  function futureStore(): StorageFake {
+    const doc = {
+      schemaVersion: SCHEMA_VERSION + 1,
+      transient: null,
+      saved: [makeMerchant()],
+      nowaKolumnaZV2: "pole, o którym ta wersja nie wie",
+    };
+
+    return createStorageFake({ seed: { [STORAGE_KEY]: JSON.stringify(doc) } });
+  }
+
+  it("reports the version it found and leaves the bytes strictly untouched", () => {
+    const future = futureStore();
+    const before = storedBytes(future);
+
+    expect(readDocument(future)).toEqual({ status: "future-version", found: SCHEMA_VERSION + 1 });
+    expect(storedBytes(future)).toBe(before);
+    expect(corruptKeys(future)).toEqual([]);
+  });
+
+  it("latches read-only for the rest of the page load, still without touching the bytes", () => {
+    const future = futureStore();
+    const before = storedBytes(future);
+
+    expect(readDocument(future).status).toBe("future-version");
+
+    // `writeDocument` is the one that needs the latch rather than the detection:
+    // it does not re-read first, so without a latched flag it would overwrite the
+    // newer document on the spot. The rest re-detect through `loadForWrite`.
+    expect(writeDocument({ schemaVersion: SCHEMA_VERSION, transient: null, saved: [] }, future)).toEqual({
+      status: "read-only",
+    });
+    expect(putTransient(makeMerchant(), future)).toEqual({ status: "read-only" });
+    expect(promoteTransient(future)).toEqual({ status: "read-only" });
+    expect(renameMerchant("x", "y", future)).toEqual({ status: "read-only" });
+    expect(updateSavedMerchant("x", { rows: [], corrections: {} }, future)).toEqual({ status: "read-only" });
+    expect(deleteMerchant("x", future)).toEqual({ status: "read-only" });
+    expect(storedBytes(future)).toBe(before);
+  });
+
+  it("latches for the page load, not for one store", () => {
+    // A GM holding a newer document must not have anything else in that load
+    // rewrite it — including a different, perfectly healthy store object.
+    expect(readDocument(futureStore()).status).toBe("future-version");
+
+    expect(putTransient(makeMerchant(), store)).toEqual({ status: "read-only" });
+  });
+
+  it("accepts the current version without latching", () => {
+    const current = createStorageFake({
+      seed: { [STORAGE_KEY]: JSON.stringify({ schemaVersion: SCHEMA_VERSION, transient: null, saved: [] }) },
+    });
+
+    expect(readDocument(current).status).toBe("ok");
+    expect(putTransient(makeMerchant(), current)).toEqual({ status: "ok" });
   });
 });

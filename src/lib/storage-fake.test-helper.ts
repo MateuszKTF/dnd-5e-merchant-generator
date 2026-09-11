@@ -19,6 +19,18 @@ export interface StorageFake extends StorageLike {
   readonly entries: Map<string, string>;
 }
 
+/**
+ * Which keys a failure applies to: an explicit list, `true` for every key, or a
+ * predicate.
+ *
+ * The predicate form exists for the quarantine side key, whose name carries a
+ * timestamp and so cannot be listed up front. Being able to fail *only* that key
+ * is what makes the worst case testable: a store too full to hold a second copy
+ * of the payload, which is precisely when discarding the corrupt original would
+ * destroy recoverable data.
+ */
+export type KeyRule = readonly string[] | true | ((key: string) => boolean);
+
 export interface StorageFakeOptions {
   /** Initial contents, written directly — no validation, so garbage is allowed. */
   readonly seed?: Readonly<Record<string, string>>;
@@ -26,21 +38,32 @@ export interface StorageFakeOptions {
    * Keys whose `setItem` throws a `QuotaExceededError`, i.e. a full store.
    * `true` means every key.
    */
-  readonly quotaExceededOn?: readonly string[] | true;
+  readonly quotaExceededOn?: KeyRule;
   /**
    * Keys whose `setItem` throws a plain `SecurityError`, i.e. a store the
    * browser exposes but refuses to write — Safari private mode. `true` means
    * every key, which is how a disabled store behaves.
    */
-  readonly throwOn?: readonly string[] | true;
+  readonly throwOn?: KeyRule;
+  /**
+   * Keys whose `getItem` throws, i.e. a browser with site data blocked, where
+   * even reading is refused rather than returning `null`.
+   */
+  readonly throwOnGet?: KeyRule;
 }
 
-function matches(key: string, rule: readonly string[] | true | undefined): boolean {
+function matches(key: string, rule: KeyRule | undefined): boolean {
   if (rule === undefined) {
     return false;
   }
+  if (rule === true) {
+    return true;
+  }
+  if (typeof rule === "function") {
+    return rule(key);
+  }
 
-  return rule === true || rule.includes(key);
+  return rule.includes(key);
 }
 
 /**
@@ -58,6 +81,10 @@ export function createStorageFake(options: StorageFakeOptions = {}): StorageFake
     entries,
 
     getItem(key) {
+      if (matches(key, options.throwOnGet)) {
+        throw new DOMException(`Read of "${key}" refused`, "SecurityError");
+      }
+
       return entries.get(key) ?? null;
     },
 
