@@ -576,10 +576,10 @@ survivable rather than destructive.
 
 #### Automated
 
-- [x] 3.1 Unit tests still pass: `npm test`
-- [x] 3.2 Type checking passes: `npx astro check`
-- [x] 3.3 Production build succeeds: `npm run build`
-- [x] 3.4 Linting passes: `npm run lint`
+- [x] 3.1 Unit tests still pass: `npm test` — d278711
+- [x] 3.2 Type checking passes: `npx astro check` — d278711
+- [x] 3.3 Production build succeeds: `npm run build` — d278711
+- [x] 3.4 Linting passes: `npm run lint` — d278711
 
 #### Manual
 
