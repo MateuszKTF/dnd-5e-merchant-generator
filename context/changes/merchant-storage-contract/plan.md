@@ -582,10 +582,10 @@ so Phase 3's below-version branch has no live case in v1.
 
 #### Automated
 
-- [x] 1.1 Unit tests pass: `npm test`
-- [x] 1.2 Type checking passes: `npx astro check`
-- [x] 1.3 Production build succeeds: `npm run build`
-- [x] 1.4 Linting passes: `npm run lint`
+- [x] 1.1 Unit tests pass: `npm test` — 85f277a
+- [x] 1.2 Type checking passes: `npx astro check` — 85f277a
+- [x] 1.3 Production build succeeds: `npm run build` — 85f277a
+- [x] 1.4 Linting passes: `npm run lint` — 85f277a
 
 #### Manual
 
@@ -596,10 +596,10 @@ so Phase 3's below-version branch has no live case in v1.
 
 #### Automated
 
-- [ ] 2.1 Unit tests pass: `npm test`
-- [ ] 2.2 Type checking passes: `npx astro check`
-- [ ] 2.3 Production build succeeds (proves no `window` access at import): `npm run build`
-- [ ] 2.4 Linting passes: `npm run lint`
+- [x] 2.1 Unit tests pass: `npm test`
+- [x] 2.2 Type checking passes: `npx astro check`
+- [x] 2.3 Production build succeeds (proves no `window` access at import): `npm run build`
+- [x] 2.4 Linting passes: `npm run lint`
 
 #### Manual
 
