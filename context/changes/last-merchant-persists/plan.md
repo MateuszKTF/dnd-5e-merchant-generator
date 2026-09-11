@@ -556,11 +556,11 @@ survivable rather than destructive.
 
 #### Automated
 
-- [x] 2.1 Unit tests still pass: `npm test`
-- [x] 2.2 Type checking passes: `npx astro check`
-- [x] 2.3 Production build succeeds: `npm run build`
-- [x] 2.4 Route still prerendered: `index.html` under `dist/client/`
-- [x] 2.5 Linting passes: `npm run lint`
+- [x] 2.1 Unit tests still pass: `npm test` — 23bcabb
+- [x] 2.2 Type checking passes: `npx astro check` — 23bcabb
+- [x] 2.3 Production build succeeds: `npm run build` — 23bcabb
+- [x] 2.4 Route still prerendered: `index.html` under `dist/client/` — 23bcabb
+- [x] 2.5 Linting passes: `npm run lint` — 23bcabb
 
 #### Manual
 
@@ -576,10 +576,10 @@ survivable rather than destructive.
 
 #### Automated
 
-- [ ] 3.1 Unit tests still pass: `npm test`
-- [ ] 3.2 Type checking passes: `npx astro check`
-- [ ] 3.3 Production build succeeds: `npm run build`
-- [ ] 3.4 Linting passes: `npm run lint`
+- [x] 3.1 Unit tests still pass: `npm test`
+- [x] 3.2 Type checking passes: `npx astro check`
+- [x] 3.3 Production build succeeds: `npm run build`
+- [x] 3.4 Linting passes: `npm run lint`
 
 #### Manual
 
