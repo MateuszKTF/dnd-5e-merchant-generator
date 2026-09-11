@@ -14,6 +14,7 @@
  */
 
 import type { AssortmentRow } from "./assortment";
+import type { PriceUnit } from "./format-price";
 
 /**
  * One row's overrides. An absent field means that cell was never corrected —
@@ -122,6 +123,32 @@ export function hasCorrections(rows: readonly AssortmentRow[], corrections: Corr
     const { quantity, price } = isCorrected(row, corrections[row.itemId]);
     return quantity || price;
   });
+}
+
+/**
+ * A price expressed in a unit chosen earlier, for display in an edit field.
+ *
+ * `priceParts` picks whichever unit fits the amount. This one is *told* the
+ * unit, because the field's unit is pinned to the row's generated price for the
+ * row's lifetime — recomputing it from the corrected value would flip the unit
+ * while the GM is typing in it. The cost is that a 1 cp candle corrected to
+ * 5 gp reads as "500 cp", which is the accepted trade.
+ *
+ * Conversion goes through whole copper, the same grid {@link isCorrected} uses,
+ * so the number shown in the field and the number the dirty check compares can
+ * never disagree about a rounding boundary.
+ */
+export function priceInUnit(gp: number, unit: PriceUnit): number {
+  const cp = Math.round(gp * CP_PER_GP);
+
+  switch (unit) {
+    case "cp":
+      return cp;
+    case "sp":
+      return Math.round(cp) / 10;
+    case "gp":
+      return Math.round(cp) / 100;
+  }
 }
 
 /**

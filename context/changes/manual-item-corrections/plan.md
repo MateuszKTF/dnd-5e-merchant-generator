@@ -512,25 +512,25 @@ session-only affordance. `CorrectionMap` keyed by `itemId` is the shape F-01 mir
 
 #### Automated
 
-- [x] 1.1 Unit tests pass: `npm test`
-- [x] 1.2 Type checking passes: `npx astro check`
-- [x] 1.3 Production build succeeds: `npm run build`
-- [x] 1.4 Linting passes: `npm run lint`
+- [x] 1.1 Unit tests pass: `npm test` — f30dd7b
+- [x] 1.2 Type checking passes: `npx astro check` — f30dd7b
+- [x] 1.3 Production build succeeds: `npm run build` — f30dd7b
+- [x] 1.4 Linting passes: `npm run lint` — f30dd7b
 
 #### Manual
 
-- [x] 1.5 `corrections.ts` makes the dirty-detection rule obvious on its own
-- [x] 1.6 Clamp bounds justified by the catalog's real range
+- [x] 1.5 `corrections.ts` makes the dirty-detection rule obvious on its own — f30dd7b
+- [x] 1.6 Clamp bounds justified by the catalog's real range — f30dd7b
 
 ### Phase 2: Editable cells
 
 #### Automated
 
-- [ ] 2.1 Unit tests still pass: `npm test`
-- [ ] 2.2 Type checking passes: `npx astro check`
-- [ ] 2.3 Production build succeeds: `npm run build`
-- [ ] 2.4 Route still prerendered: `index.html` under `dist/client/`
-- [ ] 2.5 Linting passes: `npm run lint`
+- [x] 2.1 Unit tests still pass: `npm test`
+- [x] 2.2 Type checking passes: `npx astro check`
+- [x] 2.3 Production build succeeds: `npm run build`
+- [x] 2.4 Route still prerendered: `index.html` under `dist/client/`
+- [x] 2.5 Linting passes: `npm run lint`
 
 #### Manual
 

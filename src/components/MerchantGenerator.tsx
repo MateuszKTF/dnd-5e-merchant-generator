@@ -4,6 +4,7 @@ import MerchantTable from "@/components/MerchantTable";
 import { Button } from "@/components/ui/button";
 import { CATEGORIES, WEALTH_LEVELS, type CategoryId, type Wealth } from "@/data/items";
 import { AssortmentPoolError, generateAssortment, type AssortmentRow } from "@/lib/assortment";
+import type { Correction, CorrectionMap } from "@/lib/corrections";
 
 /**
  * The generator: two choices, one button, one table.
@@ -21,6 +22,11 @@ export default function MerchantGenerator() {
   // empty array, which would mean a draw returned nothing.
   const [rows, setRows] = useState<AssortmentRow[] | null>(null);
 
+  // The GM's hand corrections, keyed by itemId and kept SEPARATE from `rows`
+  // so the generated values survive every edit. That separation is what lets
+  // an edit-and-revert compare equal to the original — see `corrections.ts`.
+  const [corrections, setCorrections] = useState<CorrectionMap>({});
+
   // The previous draw for this shop, biased against so a second press
   // produces a visibly different list.
   const [recentIds, setRecentIds] = useState<string[]>([]);
@@ -30,7 +36,14 @@ export default function MerchantGenerator() {
   function handleGenerate() {
     try {
       const next = generateAssortment(category, wealth, { recentIds });
+
+      // A new draw is a new shop: the overlay clears wholesale, because there
+      // is no coherent reading where a correction re-attaches to a re-rolled
+      // item. React batches these into ONE commit, so no render ever pairs a
+      // stale overlay with fresh rows — which would briefly show corrections on
+      // items the GM never touched.
       setRows(next);
+      setCorrections({});
       setRecentIds(next.map((row) => row.itemId));
       setError(null);
     } catch (cause) {
@@ -38,6 +51,7 @@ export default function MerchantGenerator() {
       // reshape tier depth, and an uncaught throw would blank the only page
       // the product has.
       setRows(null);
+      setCorrections({});
       setError(
         cause instanceof AssortmentPoolError
           ? "Nie udało się ułożyć asortymentu z dostępnej puli przedmiotów."
@@ -46,6 +60,19 @@ export default function MerchantGenerator() {
     }
   }
 
+  // One committed edit, merged into the overlay. A patch carries only the
+  // field that changed, so correcting a price never clears a corrected quantity.
+  //
+  // An edit that restores the generated value leaves its key in place with an
+  // equal value. That is fine and deliberate: `isCorrected` decides by
+  // comparison, so pruning keys here would be work that buys nothing.
+  function handleCorrect(itemId: string, patch: Correction) {
+    setCorrections((previous) => ({ ...previous, [itemId]: { ...previous[itemId], ...patch } }));
+  }
+
+  // Changing category or wealth does not touch the overlay, because it does not
+  // replace rows either. Only a draw does.
+  //
   // Recency is per-shop: carrying it to a different category or wealth would
   // bias a draw for no reason.
   function handleCategoryChange(value: string) {
@@ -123,7 +150,9 @@ export default function MerchantGenerator() {
         <p className="mt-6 text-neutral-600">Wybierz kategorię i zamożność osady, a potem kliknij „Stwórz”.</p>
       )}
 
-      {error === null && rows !== null && <MerchantTable rows={rows} />}
+      {error === null && rows !== null && (
+        <MerchantTable rows={rows} corrections={corrections} onCorrect={handleCorrect} />
+      )}
     </main>
   );
 }

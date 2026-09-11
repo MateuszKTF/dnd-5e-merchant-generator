@@ -8,6 +8,7 @@ import {
   isCorrected,
   mergeCorrections,
   parseDraft,
+  priceInUnit,
   type CorrectionMap,
 } from "./corrections";
 import { partsToGp, priceParts } from "./format-price";
@@ -128,6 +129,40 @@ describe("hasCorrections — the confirmation dialog's trigger", () => {
   it("ignores a difference below 1 cp but not a difference of 1 cp", () => {
     expect(hasCorrections(ROWS, { rope: { priceGp: 0.502 } })).toBe(false);
     expect(hasCorrections(ROWS, { rope: { priceGp: 0.51 } })).toBe(true);
+  });
+});
+
+describe("priceInUnit", () => {
+  it("expresses a price in the unit it is told, not the one priceParts would pick", () => {
+    // The pinned-unit case the plan accepts: a 1 cp candle corrected to 5 gp
+    // stays in the cp field it started in and reads as 500.
+    expect(priceInUnit(5, "cp")).toBe(500);
+    expect(priceInUnit(0.01, "cp")).toBe(1);
+    expect(priceInUnit(0.5, "sp")).toBe(5);
+    expect(priceInUnit(15, "gp")).toBe(15);
+  });
+
+  it("shows a clean number for a wealth-modified price rather than float noise", () => {
+    // 3 * 1.2 === 3.5999999999999996. A field showing that is unusable.
+    expect(priceInUnit(3 * 1.2, "gp")).toBe(3.6);
+    expect(priceInUnit(0.01 * 1.2, "cp")).toBe(1);
+  });
+
+  it("round-trips through partsToGp within the comparison grid", () => {
+    // What the field actually does: display, GM retypes the same number, convert
+    // back. The result must land on the same copper the dirty check compares on.
+    for (const gp of [0.01, 0.01 * 1.2, 0.5, 3 * 1.2, 15, 21000]) {
+      const { unit } = priceParts(gp);
+      const back = partsToGp(priceInUnit(gp, unit), unit);
+      expect(Math.round(back * 100)).toBe(Math.round(gp * 100));
+    }
+  });
+
+  it("agrees with priceParts whenever the pinned unit is the one priceParts chose", () => {
+    for (const gp of [0.01, 0.05, 0.5, 0.9, 1, 39, 1500, 21000]) {
+      const { value, unit } = priceParts(gp);
+      expect(priceInUnit(gp, unit)).toBe(value);
+    }
   });
 });
 
