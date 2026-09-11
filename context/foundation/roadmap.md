@@ -61,7 +61,7 @@ stało przed nim.
 
 | ID   | Change ID                   | Outcome (MG może …)                                                                             | Prerequisites          | PRD refs                                                                        | Status   |
 | ---- | --------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------- | -------- |
-| F-01 | `merchant-storage-contract` | (foundation) kontrakt kupca i zapisu w przeglądarce, z jawnym zachowaniem przy awarii magazynu | —                      | Guardrails (§ Success Criteria), Access Control, FR-009                         | planning |
+| F-01 | `merchant-storage-contract` | (foundation) kontrakt kupca i zapisu w przeglądarce, z jawnym zachowaniem przy awarii magazynu | —                      | Guardrails (§ Success Criteria), Access Control, FR-009                         | in-progress |
 | S-01 | `first-generated-assortment` | wybrać kategorię i zamożność, kliknąć „Stwórz" i zobaczyć tabelę 10–25 pozycji                 | —                      | US-01, FR-001, FR-002, FR-003, FR-004, FR-005, FR-007, NFR (czytelność na telefonie) | in-progress |
 | S-02 | `manual-item-corrections`   | skorygować cenę lub ilość pozycji i przegenerować listę bez cichej utraty tych korekt          | S-01                   | FR-006, FR-008                                                                  | in-progress |
 | S-03 | `last-merchant-persists`    | zamknąć kartę w środku sesji, wrócić i zastać ostatniego kupca; oznaczyć go jako trwałego       | F-01, S-01, S-02       | US-03, FR-009                                                                   | planning |
@@ -145,7 +145,7 @@ od nowa.
   danych przestaje być tania do odkręcenia. Dlatego kontrakt stoi przed `S-03`, a nie
   powstaje w środku niego. Zakres jest celowo wąski: kształt, klucz, odczyt, zapis,
   zachowanie przy awarii — bez interfejsu i bez listy zapisanych.
-- **Status:** planning
+- **Status:** in-progress
 
 ## Slices
 
