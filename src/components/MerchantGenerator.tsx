@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import ConfirmDialog from "@/components/ConfirmDialog";
+import MerchantLibrary from "@/components/MerchantLibrary";
 import MerchantTable from "@/components/MerchantTable";
 import StorageNotice, { type StorageCondition } from "@/components/StorageNotice";
 import { Button } from "@/components/ui/button";
@@ -16,7 +17,14 @@ import {
   type StoredCorrection,
   type StoredCorrections,
 } from "@/lib/merchant";
-import { nextSaveState, restoreFromDocument, type RestoredSession, type SaveState } from "@/lib/merchant-session";
+import {
+  nextSaveSession,
+  restoreFromDocument,
+  restoreFromMerchant,
+  type RestoredSession,
+  type SaveSession,
+  type SaveSessionEvent,
+} from "@/lib/merchant-session";
 import {
   promoteTransient,
   putTransient,
@@ -43,6 +51,16 @@ interface MerchantHeader {
   wealth: Wealth;
   createdAt: string;
 }
+
+/**
+ * A replacement the GM has been asked to confirm, held until they answer.
+ *
+ * Two different actions destroy the same irreplaceable work: a fresh draw and
+ * opening a different merchant. They share one gate rather than one gate each,
+ * and the pending action is carried *as data* — the merchant to open included —
+ * so a confirm cannot lose track of which of the two it was confirming.
+ */
+type PendingReplacement = { readonly kind: "generate" } | { readonly kind: "open"; readonly merchant: Merchant };
 
 /**
  * The overlay as storage holds it.
@@ -124,27 +142,43 @@ export default function MerchantGenerator() {
   // What is being persisted, minus the rows. `null` alongside `rows === null`.
   const [header, setHeader] = useState<MerchantHeader | null>(null);
 
-  // What the save button may claim, and the only thing it renders from. See
-  // `merchant-session.ts` for the transition table — in particular that a
-  // failed promote leaves this `armed` rather than moving it to `saved`.
-  const [saveState, setSaveState] = useState<SaveState>("unavailable");
+  // What the save button may claim AND which record a press would write. One
+  // value, one reducer — see `merchant-session.ts` for why the two halves must
+  // not move separately, and for the transition table (in particular that a
+  // failed promote leaves this `armed` rather than moving it to `saved`).
+  const [session, setSession] = useState<SaveSession>({ state: "unavailable", openedSavedId: null });
+
+  // The durable collection, held here rather than re-read per render so a
+  // merchant saved a moment ago shows up in the panel without a round-trip.
+  // Refreshed from the SAME read that restores the session — a sibling
+  // `listSaved()` would parse the document twice and, worse, produce a second
+  // failure surface with no sensible answer to which result wins.
+  const [saved, setSaved] = useState<readonly Merchant[]>([]);
 
   // The storage problem to show, if any. `null` is the ordinary case.
   const [storageStatus, setStorageStatus] = useState<StorageCondition | null>(null);
 
-  // The guardrail. Open means a draw is pending the GM's answer; nothing has
-  // been replaced yet.
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  // The guardrail. Non-null means a replacement is pending the GM's answer;
+  // nothing has been replaced yet.
+  const [pending, setPending] = useState<PendingReplacement | null>(null);
 
   /**
-   * Put a restored merchant on screen. The mount read and the cross-tab re-read
-   * both land here, so the two can never drift apart in what they set.
+   * Put a stored merchant on screen. The mount read, the cross-tab re-read and
+   * S-04's open all land here, so the three can never drift apart in what they
+   * set.
+   *
+   * The caller supplies the event rather than this function assuming
+   * `"restored"`: opening a saved merchant has to record *which* record is open
+   * in the same commit that puts its rows on screen. React batches every setter
+   * below into one commit, so the id can never land a render after the rows —
+   * which is precisely the gap in which a Zapisz would append a copy of the
+   * merchant the GM just opened.
    *
    * Every setter is stable, so the empty dependency list is honest and this
    * identity never changes — which is what lets the effects below keep their
    * own dependencies minimal.
    */
-  const adopt = useCallback((restored: RestoredSession) => {
+  const adopt = useCallback((restored: RestoredSession, event: SaveSessionEvent) => {
     const { merchant } = restored;
 
     setRows(fromStoredRows(merchant.rows));
@@ -163,7 +197,7 @@ export default function MerchantGenerator() {
       wealth: merchant.wealth,
       createdAt: merchant.createdAt,
     });
-    setSaveState((current) => nextSaveState(current, "restored"));
+    setSession((current) => nextSaveSession(current, event));
   }, []);
 
   /**
@@ -180,7 +214,7 @@ export default function MerchantGenerator() {
     setStorageStatus(status);
 
     if (status === "future-version") {
-      setSaveState((current) => nextSaveState(current, "persistence-off"));
+      setSession((current) => nextSaveSession(current, { event: "persistence-off" }));
     }
   }, []);
 
@@ -210,9 +244,14 @@ export default function MerchantGenerator() {
 
     switch (read.status) {
       case "ok": {
+        // The saved collection comes off THIS read, not a sibling `listSaved()`
+        // — and it is set whether or not there is a transient record to
+        // restore, because a GM can have a library with nothing on screen.
+        setSaved(read.doc.saved);
+
         const restored = restoreFromDocument(read.doc);
         if (restored !== null) {
-          adopt(restored);
+          adopt(restored, { event: "restored" });
         }
         return;
       }
@@ -264,6 +303,13 @@ export default function MerchantGenerator() {
         return;
       }
 
+      // Only an `ok` re-read may refresh the library — the same rule this
+      // handler already applies to adopting the transient record. Every other
+      // outcome means there is no trustworthy collection to swap in, and
+      // emptying the panel on the strength of another tab's failure would read
+      // as the GM's saved merchants having disappeared.
+      setSaved(read.doc.saved);
+
       const incoming = restoreFromDocument(read.doc);
       if (incoming === null) return;
 
@@ -274,7 +320,7 @@ export default function MerchantGenerator() {
         setStorageStatus("superseded");
       }
 
-      adopt(incoming);
+      adopt(incoming, { event: "restored" });
     }
 
     window.addEventListener("storage", handleStorageEvent);
@@ -300,7 +346,7 @@ export default function MerchantGenerator() {
     // added. A disabled or full store is deliberately NOT a stand-down: those
     // writes should be attempted, so their failure can name a remedy the GM can
     // act on.
-    if (saveState === "stood-down") {
+    if (session.state === "stood-down") {
       return;
     }
 
@@ -337,19 +383,23 @@ export default function MerchantGenerator() {
    * **The state moves on the returned status, never on the press.** A promote
    * that came back `quota-exceeded`, `unavailable` or `read-only` wrote
    * nothing, and a button reading "Zapisano" over an unsaved merchant is the
-   * PRD's heaviest guardrail violation wearing a checkmark. The GM cannot see
-   * the saved collection until S-04 lands, so this button's own state is the
-   * entire feedback available — which is exactly why it has to be honest.
+   * PRD's heaviest guardrail violation wearing a checkmark. Now that the list
+   * is on screen the lie would also be visible — the merchant simply would not
+   * be in it — which makes honesty here cheaper to check, not less important.
    */
   function handleSave() {
     const result = promoteTransient();
 
     if (result.status === "ok") {
-      setSaveState((current) => nextSaveState(current, "promoted"));
+      // From the returned record, not a re-read. `promoteTransient` hands back
+      // exactly what it appended, so the panel is correct without parsing the
+      // document a second time.
+      setSaved((current) => [...current, result.merchant]);
+      setSession((current) => nextSaveSession(current, { event: "promoted" }));
       return;
     }
 
-    setSaveState((current) => nextSaveState(current, "promote-failed"));
+    setSession((current) => nextSaveSession(current, { event: "promote-failed" }));
 
     const condition = conditionFromFailure(result.status);
     if (condition !== null) {
@@ -367,23 +417,93 @@ export default function MerchantGenerator() {
    */
   function handleGenerate() {
     if (rows !== null && hasCorrections(rows, corrections)) {
-      setConfirmOpen(true);
+      setPending({ kind: "generate" });
       return;
     }
 
     draw();
   }
 
-  function handleConfirmRegenerate() {
-    setConfirmOpen(false);
-    draw();
+  /**
+   * A tap on a row of the library — the second way to destroy unsaved
+   * corrections, and therefore the second caller of the same gate.
+   *
+   * The check is identical to Generate's, deliberately: "open" is a different
+   * button doing the same damage, and the guardrail does not care which control
+   * did it. Only the dialog's copy differs, because what is about to replace
+   * the work is a different thing.
+   */
+  function handleOpen(merchant: Merchant) {
+    if (rows !== null && hasCorrections(rows, corrections)) {
+      setPending({ kind: "open", merchant });
+      return;
+    }
+
+    openMerchant(merchant);
   }
 
-  // Changes nothing: not the rows, not the overlay, not category or wealth, and
-  // not `recentIds` — the recency bias belongs to a draw that actually happened,
-  // so a cancelled Generate must leave the next one just as biased.
-  function handleCancelRegenerate() {
-    setConfirmOpen(false);
+  function handleConfirmReplacement() {
+    // Read before clearing: the merchant to open is carried by the pending
+    // action itself, so confirming cannot lose track of which action it was.
+    const confirmed = pending;
+    setPending(null);
+
+    if (confirmed === null) return;
+
+    if (confirmed.kind === "generate") {
+      draw();
+      return;
+    }
+
+    openMerchant(confirmed.merchant);
+  }
+
+  // Changes nothing: not the rows, not the overlay, not category or wealth, not
+  // `openedSavedId`, and not `recentIds` — the recency bias belongs to a draw
+  // that actually happened, so a cancelled replacement must leave the next one
+  // just as biased.
+  function handleCancelReplacement() {
+    setPending(null);
+  }
+
+  /**
+   * Bring a saved merchant back onto the page.
+   *
+   * Three things have to land together, and they do because `adopt` batches
+   * them into one commit: the rows and controls, the transient write, and
+   * `openedSavedId`. If the id arrived a render late, a Zapisz pressed
+   * immediately after opening would append a near-identical copy to the list
+   * the GM is looking at — the exact duplicate this slice exists to prevent.
+   *
+   * **The transient slot is written too.** Otherwise a reload would restore the
+   * merchant that was on screen *before* the open, which reads as the app
+   * forgetting a deliberate action.
+   */
+  function openMerchant(merchant: Merchant) {
+    const restored = restoreFromMerchant(merchant);
+
+    // Only a hand-edited record with no rows gets here. There is nothing to put
+    // on screen, and blanking the table over it would be worse than the tap
+    // appearing to do nothing — the row already shows "0 poz.".
+    if (restored === null) return;
+
+    adopt(restored, { event: "opened", savedId: merchant.id });
+
+    // The merchant's OWN header, not the controls: those may have fallen back
+    // to a default because a stored value is no longer in the catalog, and
+    // writing the fallback back would rewrite a value this build merely fails
+    // to recognise.
+    persist(
+      {
+        id: merchant.id,
+        name: merchant.name,
+        category: merchant.category,
+        wealth: merchant.wealth,
+        createdAt: merchant.createdAt,
+      },
+      fromStoredRows(merchant.rows),
+      merchant.corrections,
+    );
   }
 
   /**
@@ -416,7 +536,14 @@ export default function MerchantGenerator() {
       setRecentIds(next.map((row) => row.itemId));
       setError(null);
       setHeader(drawn);
-      setSaveState((current) => nextSaveState(current, "generated"));
+      // Two events, one commit. `generated` alone would clear `openedSavedId`
+      // — the reducer makes sure of that, because an id outliving a draw means
+      // the next Zapisz overwrites a saved merchant with an unrelated shop.
+      // Saying `cleared-open` out loud here keeps the intent at the call site
+      // rather than resting on a rule written somewhere else.
+      setSession((current) =>
+        nextSaveSession(nextSaveSession(current, { event: "cleared-open" }), { event: "generated" }),
+      );
 
       // The values, not the state they were just handed to: a setter's effect
       // is not visible until the next render, and this write must carry the
@@ -453,7 +580,7 @@ export default function MerchantGenerator() {
     const next: CorrectionMap = { ...corrections, [itemId]: { ...corrections[itemId], ...patch } };
 
     setCorrections(next);
-    setSaveState((current) => nextSaveState(current, "corrected"));
+    setSession((current) => nextSaveSession(current, { event: "corrected" }));
 
     if (rows !== null && header !== null) {
       persist(header, rows, next);
@@ -535,13 +662,18 @@ export default function MerchantGenerator() {
             the notice explaining why it is off, rather than find the control
             missing with no explanation. */}
         {rows !== null && (
-          <Button onClick={handleSave} disabled={saveState !== "armed"} variant="secondary" className="h-11 px-6">
-            {saveState === "saved" ? "Zapisano" : "Zapisz"}
+          <Button onClick={handleSave} disabled={session.state !== "armed"} variant="secondary" className="h-11 px-6">
+            {session.state === "saved" ? "Zapisano" : "Zapisz"}
           </Button>
         )}
       </div>
 
       <StorageNotice condition={storageStatus} />
+
+      {/* Above the table, because a GM returning for the next session comes
+          here first — and collapsed, so it costs one bar rather than the
+          assortment's place above the fold. */}
+      <MerchantLibrary saved={saved} openedSavedId={session.openedSavedId} onOpen={handleOpen} />
 
       {error !== null && (
         <p role="alert" className="mt-6 text-sm text-red-700">
@@ -557,15 +689,23 @@ export default function MerchantGenerator() {
         <MerchantTable rows={rows} corrections={corrections} onCorrect={handleCorrect} />
       )}
 
+      {/* One dialog, two callers. The copy names what is about to happen —
+          drawing a new shop, or opening a different merchant — because "nowy
+          asortyment" over a tapped library row would describe the wrong
+          action. */}
       <ConfirmDialog
-        open={confirmOpen}
+        open={pending !== null}
         title="Odrzucić ręczne korekty?"
-        body="Masz ręcznie poprawione ceny lub ilości. Nowy asortyment skasuje te poprawki — nie da się ich odtworzyć."
-        confirmLabel="Stwórz mimo to"
+        body={
+          pending?.kind === "open"
+            ? "Masz ręcznie poprawione ceny lub ilości. Otwarcie innego kupca skasuje te poprawki — nie da się ich odtworzyć."
+            : "Masz ręcznie poprawione ceny lub ilości. Nowy asortyment skasuje te poprawki — nie da się ich odtworzyć."
+        }
+        confirmLabel={pending?.kind === "open" ? "Otwórz mimo to" : "Stwórz mimo to"}
         cancelLabel="Anuluj"
         destructive
-        onConfirm={handleConfirmRegenerate}
-        onCancel={handleCancelRegenerate}
+        onConfirm={handleConfirmReplacement}
+        onCancel={handleCancelReplacement}
       />
     </main>
   );
