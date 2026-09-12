@@ -21,6 +21,7 @@ import {
   nextSaveSession,
   restoreFromDocument,
   restoreFromMerchant,
+  saveActionFor,
   type RestoredSession,
   type SaveSession,
   type SaveSessionEvent,
@@ -29,6 +30,8 @@ import {
   promoteTransient,
   putTransient,
   readDocument,
+  renameMerchant,
+  updateSavedMerchant,
   STORAGE_KEY,
   type PromoteResult,
   type ReadResult,
@@ -63,6 +66,23 @@ interface MerchantHeader {
 type PendingReplacement = { readonly kind: "generate" } | { readonly kind: "open"; readonly merchant: Merchant };
 
 /**
+ * What the save button says, in the two dimensions it has to be honest about:
+ * whether the last press landed, and which record the next one would write.
+ *
+ * Derived from the same value `handleSave` branches on, so the label and the
+ * action cannot disagree.
+ */
+function saveButtonLabel(session: SaveSession): string {
+  const updating = saveActionFor(session) === "update";
+
+  if (session.state === "saved") {
+    return updating ? "Zapisano zmiany" : "Zapisano";
+  }
+
+  return updating ? "Zapisz zmiany" : "Zapisz";
+}
+
+/**
  * The overlay as storage holds it.
  *
  * S-02's map types its values `Correction | undefined` — most rows have no
@@ -94,7 +114,16 @@ function toStoredCorrections(corrections: CorrectionMap): StoredCorrections {
  * Shared by `putTransient` and `promoteTransient` because their failure modes
  * are the same store's, and a GM does not care which call discovered it.
  */
-function conditionFromFailure(status: Exclude<PromoteResult["status"], "ok">): StorageCondition | null {
+/**
+ * Why a write did not land, or `null` when it did.
+ *
+ * `promoteTransient`, `updateSavedMerchant` and `renameMerchant` all fail in
+ * exactly these four ways, so the three save paths share one vocabulary and one
+ * notice mapping instead of each inventing their own.
+ */
+type WriteFailure = Exclude<PromoteResult["status"], "ok">;
+
+function conditionFromFailure(status: WriteFailure): StorageCondition | null {
   switch (status) {
     case "unavailable":
       return "unavailable";
@@ -388,18 +417,89 @@ export default function MerchantGenerator() {
    * be in it — which makes honesty here cheaper to check, not less important.
    */
   function handleSave() {
-    const result = promoteTransient();
+    // The branch this whole slice turns on. With a record open the GM is
+    // editing THAT merchant, and promoting would leave a second near-identical
+    // entry in the list they are looking at — US-02 says a saved assortment
+    // stays the one that was saved. With nothing open there is no record to
+    // update, so a save adds one.
+    const failure = session.openedSavedId === null ? addMerchant() : updateOpenedMerchant(session.openedSavedId);
 
-    if (result.status === "ok") {
-      // From the returned record, not a re-read. `promoteTransient` hands back
-      // exactly what it appended, so the panel is correct without parsing the
-      // document a second time.
-      setSaved((current) => [...current, result.merchant]);
+    if (failure === null) {
+      // Both paths report the same event, so S-03's rule — the state moves on
+      // the returned status, never on the press — holds for both unchanged.
+      // `openedSavedId` survives a promote: the GM is still looking at that
+      // merchant, and a further correction re-arms the button for another
+      // in-place save.
       setSession((current) => nextSaveSession(current, { event: "promoted" }));
       return;
     }
 
     setSession((current) => nextSaveSession(current, { event: "promote-failed" }));
+
+    const condition = conditionFromFailure(failure);
+    if (condition !== null) {
+      setStorageStatus(condition);
+    }
+  }
+
+  /** Append a new record. Returns the failure, or `null` when it landed. */
+  function addMerchant(): WriteFailure | null {
+    const result = promoteTransient();
+    if (result.status !== "ok") {
+      return result.status;
+    }
+
+    // From the returned record, not a re-read. `promoteTransient` hands back
+    // exactly what it appended, so the panel is correct without parsing the
+    // document a second time.
+    setSaved((current) => [...current, result.merchant]);
+    return null;
+  }
+
+  /**
+   * Write the merchant on screen back over the record it came from.
+   *
+   * `updateSavedMerchant` refuses to touch `id`, `createdAt` or `name` — the
+   * three fields that make it the same merchant — so an in-place save can
+   * change what the shop sells and never which shop it is.
+   */
+  function updateOpenedMerchant(id: string): WriteFailure | null {
+    // Unreachable: `openedSavedId` is only set by an open, which puts rows on
+    // screen. Answering rather than asserting keeps a bug from blanking the
+    // page, and `not-found` is the honest name for "there is no record here".
+    if (rows === null) {
+      return "not-found";
+    }
+
+    const patch = { rows: toStoredRows(rows), corrections: toStoredCorrections(corrections) };
+
+    const result = updateSavedMerchant(id, patch);
+    if (result.status !== "ok") {
+      return result.status;
+    }
+
+    // The stamp is recomputed rather than read back, so the row's save time and
+    // its new position in the list are right without re-parsing the document.
+    // It can differ from the stored value by under a millisecond; the row shows
+    // minutes.
+    const savedAt = new Date().toISOString();
+    setSaved((current) => current.map((entry) => (entry.id === id ? { ...entry, ...patch, savedAt } : entry)));
+    return null;
+  }
+
+  /**
+   * FR-010's rename, already normalized and known to differ by the row.
+   *
+   * A failed write leaves the list exactly as it was — the row falls back to
+   * the name still held here — and says why.
+   */
+  function handleRename(id: string, name: string) {
+    const result = renameMerchant(id, name);
+
+    if (result.status === "ok") {
+      setSaved((current) => current.map((entry) => (entry.id === id ? { ...entry, name } : entry)));
+      return;
+    }
 
     const condition = conditionFromFailure(result.status);
     if (condition !== null) {
@@ -660,10 +760,14 @@ export default function MerchantGenerator() {
         {/* Only once there is a merchant to save. `stood-down` still renders it,
             disabled: the GM should be able to see that saving exists and read
             the notice explaining why it is off, rather than find the control
-            missing with no explanation. */}
+            missing with no explanation.
+
+            The label names the action, because the GM can see the list and a
+            button that silently adds when they expected an update — or the
+            reverse — is contradicted by what is on screen a moment later. */}
         {rows !== null && (
           <Button onClick={handleSave} disabled={session.state !== "armed"} variant="secondary" className="h-11 px-6">
-            {session.state === "saved" ? "Zapisano" : "Zapisz"}
+            {saveButtonLabel(session)}
           </Button>
         )}
       </div>
@@ -673,7 +777,12 @@ export default function MerchantGenerator() {
       {/* Above the table, because a GM returning for the next session comes
           here first — and collapsed, so it costs one bar rather than the
           assortment's place above the fold. */}
-      <MerchantLibrary saved={saved} openedSavedId={session.openedSavedId} onOpen={handleOpen} />
+      <MerchantLibrary
+        saved={saved}
+        openedSavedId={session.openedSavedId}
+        onOpen={handleOpen}
+        onRename={handleRename}
+      />
 
       {error !== null && (
         <p role="alert" className="mt-6 text-sm text-red-700">

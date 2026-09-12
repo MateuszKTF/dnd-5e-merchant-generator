@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 
 import type { Merchant } from "@/lib/merchant";
-import { libraryRow, sortForLibrary } from "@/lib/merchant-library";
+import { libraryRow, normalizeName, sortForLibrary } from "@/lib/merchant-library";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -10,11 +10,13 @@ interface Props {
   /** The record currently on screen, if the GM opened one. Marks its row. */
   readonly openedSavedId: string | null;
   readonly onOpen: (merchant: Merchant) => void;
+  /** Called with an already-normalized name, and only when it actually differs. */
+  readonly onRename: (id: string, name: string) => void;
 }
 
 /**
- * The library: every merchant the GM explicitly saved, and the way back into
- * one.
+ * The library: every merchant the GM explicitly saved, the way back into one,
+ * and the way to give it a name they will recognise next session.
  *
  * This is the slice where the product stops being another one-shot generator —
  * so the row's job is **recognition**, not decoration. Duplicate names are
@@ -33,7 +35,7 @@ interface Props {
  * storage, and opening one is a state change rather than a navigation that
  * would discard unsaved work.
  */
-export default function MerchantLibrary({ saved, openedSavedId, onOpen }: Props) {
+export default function MerchantLibrary({ saved, openedSavedId, onOpen, onRename }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   const merchants = sortForLibrary(saved);
@@ -71,52 +73,146 @@ export default function MerchantLibrary({ saved, openedSavedId, onOpen }: Props)
           </p>
         ) : (
           <ul className="mt-2 flex flex-col gap-1">
-            {merchants.map((merchant) => {
-              const row = libraryRow(merchant);
-              const isOpen = merchant.id === openedSavedId;
-
-              return (
-                <li key={row.id}>
-                  {/* The whole row is the target: at 360 px a link-sized hit
-                      area inside a row is the difference between opening a
-                      merchant and opening nothing. */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onOpen(merchant);
-                    }}
-                    aria-current={isOpen ? "true" : undefined}
-                    className={cn(
-                      "flex min-h-11 w-full flex-col justify-center gap-0.5 rounded-md border px-3 py-2 text-left",
-                      isOpen ? "border-neutral-800 bg-neutral-100" : "border-neutral-200 bg-white",
-                    )}
-                  >
-                    <span className="flex items-baseline gap-2">
-                      {/* min-w-0 is what lets `truncate` actually shrink inside
-                          a flex row — without it a long name pushes the badge
-                          off the edge instead of ellipsing. */}
-                      <span className="min-w-0 truncate font-medium">{row.name}</span>
-                      {isOpen && (
-                        <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-white">
-                          otwarty
-                        </span>
-                      )}
-                    </span>
-
-                    {/* The three disambiguating fields. "poz." is the ordinary
-                        Polish abbreviation and sidesteps the three-form plural
-                        in a line that has to fit a narrow row. */}
-                    <span className="truncate text-xs text-neutral-500">
-                      {row.categoryLabel} · {row.itemCount} poz.
-                      {row.savedAtLabel !== null && ` · ${row.savedAtLabel}`}
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
+            {merchants.map((merchant) => (
+              <MerchantRow
+                key={merchant.id}
+                merchant={merchant}
+                isOpen={merchant.id === openedSavedId}
+                onOpen={onOpen}
+                onRename={onRename}
+              />
+            ))}
           </ul>
         )}
       </div>
     </section>
+  );
+}
+
+interface RowProps {
+  readonly merchant: Merchant;
+  readonly isOpen: boolean;
+  readonly onOpen: (merchant: Merchant) => void;
+  readonly onRename: (id: string, name: string) => void;
+}
+
+/**
+ * One saved merchant: a name to edit, and a line to open it by.
+ *
+ * **Two elements, not one.** Phase 2 made the whole row a single button; the
+ * rename field cannot live inside it, because HTML forbids an `<input>` inside
+ * a `<button>` and focus behaves inconsistently where browsers tolerate it. So
+ * the name is its own field and the detail line is the open target — both still
+ * comfortable tap targets at 360 px, and the open button carries the merchant's
+ * name in its accessible name so it is never announced as bare metadata.
+ *
+ * Its own component because of the draft: a hook cannot live inside the parent's
+ * `map`, and each row needs its own in-progress text.
+ */
+function MerchantRow({ merchant, isOpen, onOpen, onRename }: RowProps) {
+  const row = libraryRow(merchant);
+
+  // `null` means "not being edited" — the field shows the stored name. A string
+  // is an edit in progress, including the empty string when the GM clears it.
+  const [draft, setDraft] = useState<string | null>(null);
+
+  // Escape and blur both end an edit, but only one of them commits. A native
+  // blur fires after the Escape handler runs, so without this flag abandoning
+  // an edit would still write the draft through.
+  const abandoned = useRef(false);
+
+  /**
+   * Commit on blur and Enter — never per keystroke.
+   *
+   * A rename is one storage write, not one per character: `renameMerchant`
+   * rewrites the whole document, so a per-keystroke commit would rewrite it
+   * once for every letter of "Kuźnia u Borysa".
+   *
+   * `normalizeName` returning `null` means the GM left nothing usable, which is
+   * far likelier to be a slip than a request. Dropping the draft restores the
+   * previous name, which is the only value that is certainly not a surprise —
+   * and the same fall-through handles a failed write, because the field falls
+   * back to whatever the parent still holds.
+   */
+  function commit(raw: string) {
+    const next = normalizeName(raw);
+
+    // An unchanged name is not a rename. Without this, every blur — including
+    // one where the GM only tapped the field — would rewrite the document.
+    if (next !== null && next !== merchant.name) {
+      onRename(merchant.id, next);
+    }
+
+    setDraft(null);
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      // Blur does the committing, so both paths run identical code.
+      event.currentTarget.blur();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      abandoned.current = true;
+      setDraft(null);
+      event.currentTarget.blur();
+    }
+  }
+
+  return (
+    <li
+      className={cn("rounded-md border", isOpen ? "border-neutral-800 bg-neutral-100" : "border-neutral-200 bg-white")}
+    >
+      <div className="flex items-center gap-2 px-2 pt-1">
+        {/* Reads as the row's title until focused, then becomes visibly a field
+            — the same idiom as the assortment's editable cells, so a GM who
+            learns that Escape abandons an edit in one place is right about the
+            other. No `maxLength`: `normalizeName` is the single authority on
+            the cap, and an attribute counting UTF-16 units would disagree with
+            it on an accented or astral name. */}
+        <input
+          type="text"
+          aria-label="Nazwa kupca"
+          value={draft ?? merchant.name}
+          onChange={(event) => {
+            setDraft(event.target.value);
+          }}
+          onFocus={(event) => {
+            // Renaming means replacing the auto-name, not appending to it.
+            event.currentTarget.select();
+          }}
+          onBlur={(event) => {
+            if (abandoned.current) {
+              abandoned.current = false;
+              return;
+            }
+            commit(event.target.value);
+          }}
+          onKeyDown={handleKeyDown}
+          className="min-w-0 flex-1 rounded-sm border border-transparent bg-transparent px-1 py-1 font-medium focus:border-neutral-400 focus:bg-white focus:outline-none"
+        />
+
+        {isOpen && <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-white">otwarty</span>}
+      </div>
+
+      {/* The three disambiguating fields, doubling as the open target. "poz."
+          is the ordinary Polish abbreviation and sidesteps the three-form
+          plural in a line that has to fit a narrow row. */}
+      <button
+        type="button"
+        onClick={() => {
+          onOpen(merchant);
+        }}
+        aria-current={isOpen ? "true" : undefined}
+        aria-label={`Otwórz: ${merchant.name}`}
+        className="flex min-h-11 w-full items-center px-3 pb-1 text-left text-xs text-neutral-500"
+      >
+        <span className="truncate">
+          {row.categoryLabel} · {row.itemCount} poz.
+          {row.savedAtLabel !== null && ` · ${row.savedAtLabel}`}
+        </span>
+      </button>
+    </li>
   );
 }
