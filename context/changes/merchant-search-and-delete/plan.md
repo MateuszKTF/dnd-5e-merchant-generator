@@ -446,10 +446,10 @@ plans is re-planned, that is the file to check.
 
 #### Automated
 
-- [x] 2.1 Unit tests pass including the explicit `ł` case: `npm test`
-- [x] 2.2 Type checking passes: `npx astro check`
-- [x] 2.3 Production build succeeds: `npm run build`
-- [x] 2.4 Linting passes: `npm run lint`
+- [x] 2.1 Unit tests pass including the explicit `ł` case: `npm test` — 89367e9
+- [x] 2.2 Type checking passes: `npx astro check` — 89367e9
+- [x] 2.3 Production build succeeds: `npm run build` — 89367e9
+- [x] 2.4 Linting passes: `npm run lint` — 89367e9
 
 #### Manual
 
