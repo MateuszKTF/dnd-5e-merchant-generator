@@ -1,3 +1,4 @@
+import { Trash2 } from "lucide-react";
 import { useRef, useState, type KeyboardEvent } from "react";
 
 import type { Merchant } from "@/lib/merchant";
@@ -12,6 +13,8 @@ interface Props {
   readonly onOpen: (merchant: Merchant) => void;
   /** Called with an already-normalized name, and only when it actually differs. */
   readonly onRename: (id: string, name: string) => void;
+  /** Asks to delete. The caller confirms first — this never deletes on its own. */
+  readonly onDelete: (id: string) => void;
 }
 
 /**
@@ -35,7 +38,7 @@ interface Props {
  * storage, and opening one is a state change rather than a navigation that
  * would discard unsaved work.
  */
-export default function MerchantLibrary({ saved, openedSavedId, onOpen, onRename }: Props) {
+export default function MerchantLibrary({ saved, openedSavedId, onOpen, onRename, onDelete }: Props) {
   const [expanded, setExpanded] = useState(false);
 
   const merchants = sortForLibrary(saved);
@@ -80,6 +83,7 @@ export default function MerchantLibrary({ saved, openedSavedId, onOpen, onRename
                 isOpen={merchant.id === openedSavedId}
                 onOpen={onOpen}
                 onRename={onRename}
+                onDelete={onDelete}
               />
             ))}
           </ul>
@@ -94,22 +98,28 @@ interface RowProps {
   readonly isOpen: boolean;
   readonly onOpen: (merchant: Merchant) => void;
   readonly onRename: (id: string, name: string) => void;
+  readonly onDelete: (id: string) => void;
 }
 
 /**
  * One saved merchant: a name to edit, and a line to open it by.
  *
- * **Two elements, not one.** Phase 2 made the whole row a single button; the
- * rename field cannot live inside it, because HTML forbids an `<input>` inside
- * a `<button>` and focus behaves inconsistently where browsers tolerate it. So
- * the name is its own field and the detail line is the open target — both still
- * comfortable tap targets at 360 px, and the open button carries the merchant's
- * name in its accessible name so it is never announced as bare metadata.
+ * **Three tap zones, deliberately laid out.** S-04 made the whole row a single
+ * button; the rename field cannot live inside it, because HTML forbids an
+ * `<input>` inside a `<button>` and focus behaves inconsistently where browsers
+ * tolerate it. So the name gets its own line, and the detail line below carries
+ * the open target and the delete control.
+ *
+ * The split is not only structural. Delete is the one irreversible action here,
+ * and it sits on the *other line* from the name field — so a thumb sliding off
+ * the name while renaming lands on nothing, never on the control that removes
+ * the merchant. The open button carries the merchant's name in its accessible
+ * name, and so does delete: an icon alone does not say what it deletes.
  *
  * Its own component because of the draft: a hook cannot live inside the parent's
  * `map`, and each row needs its own in-progress text.
  */
-function MerchantRow({ merchant, isOpen, onOpen, onRename }: RowProps) {
+function MerchantRow({ merchant, isOpen, onOpen, onRename, onDelete }: RowProps) {
   const row = libraryRow(merchant);
 
   // `null` means "not being edited" — the field shows the stored name. A string
@@ -196,23 +206,39 @@ function MerchantRow({ merchant, isOpen, onOpen, onRename }: RowProps) {
         {isOpen && <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-white">otwarty</span>}
       </div>
 
-      {/* The three disambiguating fields, doubling as the open target. "poz."
-          is the ordinary Polish abbreviation and sidesteps the three-form
-          plural in a line that has to fit a narrow row. */}
-      <button
-        type="button"
-        onClick={() => {
-          onOpen(merchant);
-        }}
-        aria-current={isOpen ? "true" : undefined}
-        aria-label={`Otwórz: ${merchant.name}`}
-        className="flex min-h-11 w-full items-center px-3 pb-1 text-left text-xs text-neutral-500"
-      >
-        <span className="truncate">
-          {row.categoryLabel} · {row.itemCount} poz.
-          {row.savedAtLabel !== null && ` · ${row.savedAtLabel}`}
-        </span>
-      </button>
+      <div className="flex items-stretch gap-2">
+        {/* The three disambiguating fields, doubling as the open target. "poz."
+            is the ordinary Polish abbreviation and sidesteps the three-form
+            plural in a line that has to fit a narrow row. */}
+        <button
+          type="button"
+          onClick={() => {
+            onOpen(merchant);
+          }}
+          aria-current={isOpen ? "true" : undefined}
+          aria-label={`Otwórz: ${merchant.name}`}
+          className="flex min-h-11 min-w-0 flex-1 items-center px-3 pb-1 text-left text-xs text-neutral-500"
+        >
+          <span className="truncate">
+            {row.categoryLabel} · {row.itemCount} poz.
+            {row.savedAtLabel !== null && ` · ${row.savedAtLabel}`}
+          </span>
+        </button>
+
+        {/* Trailing edge, full tap-target height, and the only red thing in the
+            panel — the one control here that cannot be undone. It asks; the
+            caller confirms. */}
+        <button
+          type="button"
+          onClick={() => {
+            onDelete(merchant.id);
+          }}
+          aria-label={`Usuń: ${merchant.name}`}
+          className="flex size-11 shrink-0 items-center justify-center rounded-md text-red-700 hover:bg-red-50"
+        >
+          <Trash2 aria-hidden="true" className="size-4" />
+        </button>
+      </div>
     </li>
   );
 }

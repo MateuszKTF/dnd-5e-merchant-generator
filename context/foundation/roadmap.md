@@ -66,7 +66,7 @@ stało przed nim.
 | S-02 | `manual-item-corrections`   | skorygować cenę lub ilość pozycji i przegenerować listę bez cichej utraty tych korekt          | S-01                   | FR-006, FR-008                                                                  | in-progress |
 | S-03 | `last-merchant-persists`    | zamknąć kartę w środku sesji, wrócić i zastać ostatniego kupca; oznaczyć go jako trwałego       | F-01, S-01, S-02       | US-03, FR-009                                                                   | in-progress |
 | S-04 | `saved-merchants-library`   | odnaleźć zapisanego kupca na liście, otworzyć go i zmienić mu nazwę                            | F-01, S-03             | US-02, FR-010, FR-011                                                           | in-progress |
-| S-05 | `merchant-search-and-delete` | wyszukać kupca po nazwie i usunąć niepotrzebnego, gdy lista urośnie przez miesiące kampanii    | S-04                   | US-02, FR-012, FR-013                                                           | planning |
+| S-05 | `merchant-search-and-delete` | wyszukać kupca po nazwie i usunąć niepotrzebnego, gdy lista urośnie przez miesiące kampanii    | S-04                   | US-02, FR-012, FR-013                                                           | in-progress |
 
 ## Streams
 
@@ -249,7 +249,7 @@ od nowa.
   najmniej, jeśli termin 2026-09-13 przyciśnie, bo na pierwszej sesji MG ma jednego kupca,
   nie czterdziestu. Jednocześnie PRD uzasadnia FR-012 wprost skalą kampanii, więc nie jest
   to kandydat do wykreślenia — tylko do dowiezienia jako ostatni.
-- **Status:** planning
+- **Status:** in-progress
 
 ## Backlog Handoff
 

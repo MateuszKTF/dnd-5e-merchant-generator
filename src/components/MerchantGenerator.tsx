@@ -27,6 +27,7 @@ import {
   type SaveSessionEvent,
 } from "@/lib/merchant-session";
 import {
+  deleteMerchant,
   promoteTransient,
   putTransient,
   readDocument,
@@ -56,14 +57,60 @@ interface MerchantHeader {
 }
 
 /**
- * A replacement the GM has been asked to confirm, held until they answer.
+ * An irreversible action the GM has been asked to confirm, held until they
+ * answer.
  *
- * Two different actions destroy the same irreplaceable work: a fresh draw and
- * opening a different merchant. They share one gate rather than one gate each,
- * and the pending action is carried *as data* — the merchant to open included —
- * so a confirm cannot lose track of which of the two it was confirming.
+ * Three actions destroy something that cannot be got back: a fresh draw and
+ * opening a different merchant both discard hand corrections, and a delete
+ * removes a saved merchant from storage outright. They share one gate — and
+ * one `<dialog>` — rather than one each, so two modals can never be open at
+ * once, and the pending action is carried *as data* (the merchant included) so
+ * a confirm cannot lose track of which of the three it was confirming.
  */
-type PendingReplacement = { readonly kind: "generate" } | { readonly kind: "open"; readonly merchant: Merchant };
+type PendingAction =
+  | { readonly kind: "generate" }
+  | { readonly kind: "open"; readonly merchant: Merchant }
+  | { readonly kind: "delete"; readonly merchant: Merchant };
+
+/** The copy for one pending action. Named per action, never generic. */
+interface ConfirmCopy {
+  readonly title: string;
+  readonly body: string;
+  readonly confirmLabel: string;
+}
+
+/**
+ * What the dialog says, per action.
+ *
+ * Each names what is about to be lost and what is about to happen. "Nowy
+ * asortyment" over a tapped library row, or "odrzucić korekty" over a delete,
+ * would describe the wrong action to someone about to agree to it.
+ */
+function confirmCopyFor(action: PendingAction): ConfirmCopy {
+  switch (action.kind) {
+    case "generate":
+      return {
+        title: "Odrzucić ręczne korekty?",
+        body: "Masz ręcznie poprawione ceny lub ilości. Nowy asortyment skasuje te poprawki — nie da się ich odtworzyć.",
+        confirmLabel: "Stwórz mimo to",
+      };
+    case "open":
+      return {
+        title: "Odrzucić ręczne korekty?",
+        body: "Masz ręcznie poprawione ceny lub ilości. Otwarcie innego kupca skasuje te poprawki — nie da się ich odtworzyć.",
+        confirmLabel: "Otwórz mimo to",
+      };
+    case "delete":
+      return {
+        title: "Usunąć kupca?",
+        // The name is the whole point: this is the one dialog where the GM has
+        // to know *which* record they are about to lose, and the list may hold
+        // two shops sharing a name.
+        body: `„${action.merchant.name}” zniknie z listy i z pamięci przeglądarki. Nie da się tego cofnąć.`,
+        confirmLabel: "Usuń",
+      };
+  }
+}
 
 /**
  * What the save button says, in the two dimensions it has to be honest about:
@@ -175,7 +222,9 @@ export default function MerchantGenerator() {
   // value, one reducer — see `merchant-session.ts` for why the two halves must
   // not move separately, and for the transition table (in particular that a
   // failed promote leaves this `armed` rather than moving it to `saved`).
-  const [session, setSession] = useState<SaveSession>({ state: "unavailable", openedSavedId: null });
+  // Read through `session` below, never directly: the opened record has to be
+  // reconciled against the list before anything acts on it.
+  const [storedSession, setSession] = useState<SaveSession>({ state: "unavailable", openedSavedId: null });
 
   // The durable collection, held here rather than re-read per render so a
   // merchant saved a moment ago shows up in the panel without a round-trip.
@@ -187,9 +236,35 @@ export default function MerchantGenerator() {
   // The storage problem to show, if any. `null` is the ordinary case.
   const [storageStatus, setStorageStatus] = useState<StorageCondition | null>(null);
 
-  // The guardrail. Non-null means a replacement is pending the GM's answer;
-  // nothing has been replaced yet.
-  const [pending, setPending] = useState<PendingReplacement | null>(null);
+  /**
+   * The save session, with the opened record reconciled against the list.
+   *
+   * **A record that has left `saved` is no longer open.** S-04 tracks
+   * `openedSavedId` so Zapisz can save in place; once that record is deleted the
+   * id points at nothing, and `updateSavedMerchant` answers `not-found` without
+   * appending — so the button would fail to save with no visible cause.
+   *
+   * Derived on every render rather than repaired in the delete handler, because
+   * a delete is not the only way a record leaves the list: another tab's delete
+   * arrives through the `storage` listener below and never passes through any
+   * handler here. Deriving makes the rule total — it holds for the local
+   * delete, the cross-tab delete, and any future path that removes a record —
+   * and it does it without an effect that syncs state to state.
+   *
+   * The stored id is left alone; nothing reads it directly. Everything below
+   * reads this.
+   */
+  const session: SaveSession = {
+    state: storedSession.state,
+    openedSavedId:
+      storedSession.openedSavedId !== null && saved.some((entry) => entry.id === storedSession.openedSavedId)
+        ? storedSession.openedSavedId
+        : null,
+  };
+
+  // The guardrail. Non-null means an irreversible action is pending the GM's
+  // answer; nothing has been replaced or removed yet.
+  const [pending, setPending] = useState<PendingAction | null>(null);
 
   /**
    * Put a stored merchant on screen. The mount read, the cross-tab re-read and
@@ -542,27 +617,70 @@ export default function MerchantGenerator() {
     openMerchant(merchant);
   }
 
-  function handleConfirmReplacement() {
-    // Read before clearing: the merchant to open is carried by the pending
-    // action itself, so confirming cannot lose track of which action it was.
+  /**
+   * A tap on a row's delete control. Never deletes on its own — a saved
+   * merchant leaving storage is exactly what US-02's guardrail is about, so it
+   * always goes through the dialog, which names the record.
+   */
+  function handleDelete(id: string) {
+    const merchant = saved.find((entry) => entry.id === id);
+    if (merchant === undefined) return;
+
+    setPending({ kind: "delete", merchant });
+  }
+
+  function handleConfirm() {
+    // Read before clearing: the merchant is carried by the pending action
+    // itself, so confirming cannot lose track of which action it was.
     const confirmed = pending;
     setPending(null);
 
     if (confirmed === null) return;
 
-    if (confirmed.kind === "generate") {
-      draw();
+    switch (confirmed.kind) {
+      case "generate":
+        draw();
+        return;
+      case "open":
+        openMerchant(confirmed.merchant);
+        return;
+      case "delete":
+        deleteSavedMerchant(confirmed.merchant.id);
+        return;
+    }
+  }
+
+  /**
+   * FR-013's delete, the only way anything leaves storage.
+   *
+   * **The row goes only once the write says so.** Removing it first would show
+   * a merchant as deleted while it is still in the document, and a reload would
+   * resurrect it — a lie the GM would have already acted on.
+   *
+   * `not-found` counts as success. It means another tab deleted the record
+   * while this tab's confirmation was open: the GM wanted it gone and it is
+   * gone, so dropping the row and staying quiet is the honest answer. Raising a
+   * failure notice there would report a problem that does not exist.
+   */
+  function deleteSavedMerchant(id: string) {
+    const result = deleteMerchant(id);
+
+    if (result.status === "ok" || result.status === "not-found") {
+      setSaved((current) => current.filter((entry) => entry.id !== id));
       return;
     }
 
-    openMerchant(confirmed.merchant);
+    const condition = conditionFromFailure(result.status);
+    if (condition !== null) {
+      setStorageStatus(condition);
+    }
   }
 
   // Changes nothing: not the rows, not the overlay, not category or wealth, not
-  // `openedSavedId`, and not `recentIds` — the recency bias belongs to a draw
-  // that actually happened, so a cancelled replacement must leave the next one
-  // just as biased.
-  function handleCancelReplacement() {
+  // `openedSavedId`, not the saved list, and not `recentIds` — the recency bias
+  // belongs to a draw that actually happened, so a cancelled action must leave
+  // the next one just as biased.
+  function handleCancel() {
     setPending(null);
   }
 
@@ -703,6 +821,11 @@ export default function MerchantGenerator() {
     setRecentIds([]);
   }
 
+  // The closed dialog still needs strings for its required props. Falling back
+  // to the regenerate copy is arbitrary and invisible: nothing renders it,
+  // because `open` is false in exactly the case this fallback covers.
+  const copy = confirmCopyFor(pending ?? { kind: "generate" });
+
   return (
     // px-4 keeps a gutter at 360 px; the max-width stops the table stretching
     // into unreadable line lengths on a laptop.
@@ -782,6 +905,7 @@ export default function MerchantGenerator() {
         openedSavedId={session.openedSavedId}
         onOpen={handleOpen}
         onRename={handleRename}
+        onDelete={handleDelete}
       />
 
       {error !== null && (
@@ -798,23 +922,19 @@ export default function MerchantGenerator() {
         <MerchantTable rows={rows} corrections={corrections} onCorrect={handleCorrect} />
       )}
 
-      {/* One dialog, two callers. The copy names what is about to happen —
-          drawing a new shop, or opening a different merchant — because "nowy
-          asortyment" over a tapped library row would describe the wrong
-          action. */}
+      {/* One dialog, three callers — regenerate, open, delete. The copy is
+          chosen per action so the sentence the GM agrees to describes the thing
+          that is about to happen, and `destructive` keeps a stray Enter off the
+          confirming button in all three. */}
       <ConfirmDialog
         open={pending !== null}
-        title="Odrzucić ręczne korekty?"
-        body={
-          pending?.kind === "open"
-            ? "Masz ręcznie poprawione ceny lub ilości. Otwarcie innego kupca skasuje te poprawki — nie da się ich odtworzyć."
-            : "Masz ręcznie poprawione ceny lub ilości. Nowy asortyment skasuje te poprawki — nie da się ich odtworzyć."
-        }
-        confirmLabel={pending?.kind === "open" ? "Otwórz mimo to" : "Stwórz mimo to"}
+        title={copy.title}
+        body={copy.body}
+        confirmLabel={copy.confirmLabel}
         cancelLabel="Anuluj"
         destructive
-        onConfirm={handleConfirmReplacement}
-        onCancel={handleCancelReplacement}
+        onConfirm={handleConfirm}
+        onCancel={handleCancel}
       />
     </main>
   );
