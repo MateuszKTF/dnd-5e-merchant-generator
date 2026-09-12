@@ -433,14 +433,14 @@ plans is re-planned, that is the file to check.
 
 #### Manual
 
-- [ ] 1.7 Delete shows a confirmation naming the merchant; cancel changes nothing
-- [ ] 1.8 Confirm removes it from the list and from storage, verified after reload
-- [ ] 1.9 Regenerate guard and open guard still work alongside the new delete call site
-- [ ] 1.10 Deleting the open merchant keeps the assortment and reverts the save button
-- [ ] 1.11 Storage blocked: notice appears and the row stays in the list
-- [ ] 1.12 Deleting the last merchant returns the panel to its empty state
-- [ ] 1.13 Cross-tab delete clears the other tab's opened-merchant state
-- [ ] 1.14 Three tap zones separated at 360 px; renaming never triggers delete
+- [x] 1.7 Delete shows a confirmation naming the merchant; cancel changes nothing
+- [x] 1.8 Confirm removes it from the list and from storage, verified after reload
+- [x] 1.9 Regenerate guard and open guard still work alongside the new delete call site
+- [x] 1.10 Deleting the open merchant keeps the assortment and reverts the save button
+- [x] 1.11 Storage blocked: notice appears and the row stays in the list
+- [x] 1.12 Deleting the last merchant returns the panel to its empty state
+- [x] 1.13 Cross-tab delete clears the other tab's opened-merchant state
+- [x] 1.14 Three tap zones separated at 360 px; renaming never triggers delete
 
 ### Phase 2: Search
 
@@ -453,11 +453,11 @@ plans is re-planned, that is the file to check.
 
 #### Manual
 
-- [ ] 2.5 Typing part of a name narrows the list
-- [ ] 2.6 A name containing `ł` is found by typing `l`
-- [ ] 2.7 A category word finds a merchant renamed away from it
-- [ ] 2.8 Two merchants sharing a name both appear
-- [ ] 2.9 Clearing the query restores the full list
-- [ ] 2.10 A no-match query shows a hint, not a blank panel
-- [ ] 2.11 Deleting while filtered removes the row and keeps the query
-- [ ] 2.12 Input and narrowed list comfortable at 360 px without pushing the table below the fold
+- [x] 2.5 Typing part of a name narrows the list
+- [x] 2.6 A name containing `ł` is found by typing `l`
+- [x] 2.7 A category word finds a merchant renamed away from it
+- [x] 2.8 Two merchants sharing a name both appear
+- [x] 2.9 Clearing the query restores the full list
+- [x] 2.10 A no-match query shows a hint, not a blank panel
+- [x] 2.11 Deleting while filtered removes the row and keeps the query
+- [x] 2.12 Input and narrowed list comfortable at 360 px without pushing the table below the fold
