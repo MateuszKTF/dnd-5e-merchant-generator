@@ -282,17 +282,28 @@ export function nextSaveSession(current: SaveSession, next: SaveSessionEvent): S
   };
 }
 
-/** What a press would do: update the record the GM has open, or add a new one. */
-export type SaveAction = "update" | "add";
-
 /**
- * The action the button is about to take — and, in S-04, the action its label
- * has to name.
+ * Which saved record — if any — this document's transient slot came from.
  *
- * Derived, never stored. With the list on screen a button that silently does
- * one or the other is contradicted by what the GM can see, so the label reads
- * from the same value the handler branches on and the two cannot disagree.
+ * `openedSavedId` cannot be persisted: the storage format is forward-only
+ * (AGENTS.md) and a UI concern does not earn a field in it. But the link does
+ * not need a field, because it is already implied by data that **is** stored.
+ *
+ * Opening a saved merchant writes it to the transient slot under **its own
+ * id**, while `promoteTransient` always mints a **fresh** id for the copy it
+ * appends. A transient whose id also appears in `saved` can therefore only mean
+ * one thing: that transient came from that saved record. The inference is not a
+ * heuristic — it is sound for exactly as long as promote keeps minting, which
+ * is why this comment names that dependency out loud.
+ *
+ * Returning `null` is the ordinary case: a freshly drawn merchant has an id
+ * nothing else shares.
  */
-export function saveActionFor(session: SaveSession): SaveAction {
-  return session.openedSavedId === null ? "add" : "update";
+export function openedSavedIdFor(doc: StorageDocument): string | null {
+  const transient = doc.transient;
+  if (transient === null) {
+    return null;
+  }
+
+  return doc.saved.some((merchant) => merchant.id === transient.id) ? transient.id : null;
 }

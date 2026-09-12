@@ -8,9 +8,9 @@ import {
   isKnownWealth,
   nextSaveSession,
   nextSaveState,
+  openedSavedIdFor,
   restoreFromDocument,
   restoreFromMerchant,
-  saveActionFor,
   SAVE_EVENTS,
   SAVE_STATES,
   type SaveSession,
@@ -419,22 +419,50 @@ describe("nextSaveSession", () => {
   });
 });
 
-describe("saveActionFor", () => {
-  it("adds a new merchant when nothing is open", () => {
-    expect(saveActionFor({ state: "armed", openedSavedId: null })).toBe("add");
+describe("openedSavedIdFor", () => {
+  const opened = merchant({ id: "m-kowal", savedAt: "2026-09-12T10:00:00.000Z" });
+
+  function documentOf(transient: Merchant | null, saved: Merchant[]): StorageDocument {
+    return { schemaVersion: SCHEMA_VERSION, transient, saved };
+  }
+
+  it("answers null when there is no transient record", () => {
+    expect(openedSavedIdFor(documentOf(null, [opened]))).toBeNull();
   });
 
-  it("updates the open merchant in place", () => {
-    expect(saveActionFor({ state: "armed", openedSavedId: "m-saved" })).toBe("update");
+  it("answers null for a freshly drawn merchant", () => {
+    // The ordinary case: a draw mints an id nothing else shares, so nothing is
+    // open and corrections have no library record to flow into.
+    expect(openedSavedIdFor(documentOf(merchant({ id: "m-fresh" }), [opened]))).toBeNull();
   });
 
-  it("depends on the opened record alone, not on the button's state", () => {
-    // The label and the handler read the same value, so they cannot disagree
-    // about which action a press takes — with the list on screen, a button that
-    // says one thing and does the other is contradicted by what the GM can see.
-    for (const state of SAVE_STATES) {
-      expect(saveActionFor({ state, openedSavedId: "m-saved" })).toBe("update");
-      expect(saveActionFor({ state, openedSavedId: null })).toBe("add");
-    }
+  it("answers null when the library is empty", () => {
+    expect(openedSavedIdFor(documentOf(merchant({ id: "m-fresh" }), []))).toBeNull();
+  });
+
+  it("recognises a transient that came from a saved record", () => {
+    // What `openMerchant` leaves behind: the transient carries the saved
+    // record's own id. That shared id is the entire link — no stored field.
+    const transient = merchant({ id: "m-kowal", savedAt: null });
+
+    expect(openedSavedIdFor(documentOf(transient, [opened]))).toBe("m-kowal");
+  });
+
+  it("finds the record among several", () => {
+    const others = [merchant({ id: "m-a" }), opened, merchant({ id: "m-b" })];
+
+    expect(openedSavedIdFor(documentOf(merchant({ id: "m-kowal" }), others))).toBe("m-kowal");
+  });
+
+  it("treats a document straight out of promoteTransient as unlinked", () => {
+    // The state the promote path has to repair. `promoteTransient` appends the
+    // copy under a FRESH id and leaves the transient on the old one, so nothing
+    // links them — which is why `addMerchant` rewrites the transient afterwards.
+    // If this ever starts returning the id, promote stopped minting and the
+    // whole inference underneath this function is unsound.
+    const transient = merchant({ id: "m-old" });
+    const promotedCopy = merchant({ id: "m-new", savedAt: "2026-09-12T10:00:00.000Z" });
+
+    expect(openedSavedIdFor(documentOf(transient, [promotedCopy]))).toBeNull();
   });
 });

@@ -19,12 +19,13 @@ import {
 } from "@/lib/merchant";
 import {
   nextSaveSession,
+  openedSavedIdFor,
   restoreFromDocument,
   restoreFromMerchant,
-  saveActionFor,
   type RestoredSession,
   type SaveSession,
   type SaveSessionEvent,
+  type SaveState,
 } from "@/lib/merchant-session";
 import {
   deleteMerchant,
@@ -36,6 +37,7 @@ import {
   STORAGE_KEY,
   type PromoteResult,
   type ReadResult,
+  type StorageDocument,
 } from "@/lib/merchant-storage";
 
 /**
@@ -113,20 +115,25 @@ function confirmCopyFor(action: PendingAction): ConfirmCopy {
 }
 
 /**
- * What the save button says, in the two dimensions it has to be honest about:
- * whether the last press landed, and which record the next one would write.
- *
- * Derived from the same value `handleSave` branches on, so the label and the
- * action cannot disagree.
+ * What the save button says. Only one dimension is left to be honest about —
+ * whether the last press landed — because the button is not rendered at all
+ * once a record is open.
  */
-function saveButtonLabel(session: SaveSession): string {
-  const updating = saveActionFor(session) === "update";
+function saveButtonLabel(state: SaveState): string {
+  return state === "saved" ? "Zapisano" : "Zapisz";
+}
 
-  if (session.state === "saved") {
-    return updating ? "Zapisano zmiany" : "Zapisano";
-  }
-
-  return updating ? "Zapisz zmiany" : "Zapisz";
+/**
+ * Which event an adopted document deserves: an ordinary restore, or a reopen of
+ * the saved record it came from.
+ *
+ * Both read sites use it, so a merchant opened in one tab is still recognised as
+ * open in the other — the two paths cannot drift on the one rule that decides
+ * whether corrections auto-save.
+ */
+function reopenEvent(doc: StorageDocument): SaveSessionEvent {
+  const openedId = openedSavedIdFor(doc);
+  return openedId === null ? { event: "restored" } : { event: "opened", savedId: openedId };
 }
 
 /**
@@ -355,7 +362,7 @@ export default function MerchantGenerator() {
 
         const restored = restoreFromDocument(read.doc);
         if (restored !== null) {
-          adopt(restored, { event: "restored" });
+          adopt(restored, reopenEvent(read.doc));
         }
         return;
       }
@@ -424,7 +431,7 @@ export default function MerchantGenerator() {
         setStorageStatus("superseded");
       }
 
-      adopt(incoming, { event: "restored" });
+      adopt(incoming, reopenEvent(read.doc));
     }
 
     window.addEventListener("storage", handleStorageEvent);
@@ -492,12 +499,9 @@ export default function MerchantGenerator() {
    * be in it — which makes honesty here cheaper to check, not less important.
    */
   function handleSave() {
-    // The branch this whole slice turns on. With a record open the GM is
-    // editing THAT merchant, and promoting would leave a second near-identical
-    // entry in the list they are looking at — US-02 says a saved assortment
-    // stays the one that was saved. With nothing open there is no record to
-    // update, so a save adds one.
-    const failure = session.openedSavedId === null ? addMerchant() : updateOpenedMerchant(session.openedSavedId);
+    // Only ever reachable with nothing open — the button is not rendered
+    // otherwise, because an open record has nothing left to save by hand.
+    const failure = addMerchant();
 
     if (failure === null) {
       // Both paths report the same event, so S-03's rule — the state moves on
@@ -517,7 +521,21 @@ export default function MerchantGenerator() {
     }
   }
 
-  /** Append a new record. Returns the failure, or `null` when it landed. */
+  /**
+   * Append a new record — and adopt it, so the GM keeps editing the merchant
+   * they just saved rather than a detached copy of it.
+   *
+   * **The adoption is not a nicety; without it the complaint comes back one
+   * step later.** `promoteTransient` mints a fresh id for the copy and leaves
+   * the transient on the old one, so a correction made after saving would land
+   * only in the transient — exactly the behaviour this change removes, just
+   * after "Zapisz" instead of after opening from the list.
+   *
+   * Three things therefore move together: the transient is rewritten under the
+   * promoted id, `header` is moved onto it (otherwise the *next* correction
+   * rewrites the transient back to the old id and breaks the link again), and
+   * the session records the record as open.
+   */
   function addMerchant(): WriteFailure | null {
     const result = promoteTransient();
     if (result.status !== "ok") {
@@ -527,30 +545,59 @@ export default function MerchantGenerator() {
     // From the returned record, not a re-read. `promoteTransient` hands back
     // exactly what it appended, so the panel is correct without parsing the
     // document a second time.
-    setSaved((current) => [...current, result.merchant]);
+    const promoted = result.merchant;
+    setSaved((current) => [...current, promoted]);
+
+    const linked: MerchantHeader = {
+      id: promoted.id,
+      name: promoted.name,
+      category: promoted.category,
+      wealth: promoted.wealth,
+      createdAt: promoted.createdAt,
+    };
+
+    setHeader(linked);
+    if (rows !== null) {
+      persist(linked, rows, corrections);
+    }
+
+    setSession((current) => nextSaveSession(current, { event: "opened", savedId: promoted.id }));
     return null;
   }
 
   /**
-   * Write the merchant on screen back over the record it came from.
+   * A correction to an OPEN record lands in that record, with no press.
+   *
+   * This is the whole point of the change. The product used to auto-save the
+   * throwaway merchant and demand a click for the one the GM deliberately kept
+   * — the inversion of what anyone expects, and the reason a saved shop could
+   * end up duplicated instead of updated.
    *
    * `updateSavedMerchant` refuses to touch `id`, `createdAt` or `name` — the
-   * three fields that make it the same merchant — so an in-place save can
-   * change what the shop sells and never which shop it is.
+   * three fields that make it the same merchant — so an auto-save can change
+   * what the shop sells and never which shop it is.
+   *
+   * **A failed write has no retry control, by decision (2026-09-12).** The
+   * persistent `StorageNotice` carries the whole signal, and the next committed
+   * correction retries on its own. If the GM stops correcting while storage is
+   * refusing writes, the library record simply does not get that edit: the
+   * banner stays up, but nothing forces the issue.
    */
-  function updateOpenedMerchant(id: string): WriteFailure | null {
-    // Unreachable: `openedSavedId` is only set by an open, which puts rows on
-    // screen. Answering rather than asserting keeps a bug from blanking the
-    // page, and `not-found` is the honest name for "there is no record here".
-    if (rows === null) {
-      return "not-found";
+  function autosaveOpened(nextRows: readonly AssortmentRow[], nextCorrections: CorrectionMap) {
+    const openedId = session.openedSavedId;
+    if (openedId === null) {
+      return;
     }
 
-    const patch = { rows: toStoredRows(rows), corrections: toStoredCorrections(corrections) };
+    const patch = { rows: toStoredRows(nextRows), corrections: toStoredCorrections(nextCorrections) };
 
-    const result = updateSavedMerchant(id, patch);
+    const result = updateSavedMerchant(openedId, patch);
     if (result.status !== "ok") {
-      return result.status;
+      const condition = conditionFromFailure(result.status);
+      if (condition !== null) {
+        setStorageStatus(condition);
+      }
+      return;
     }
 
     // The stamp is recomputed rather than read back, so the row's save time and
@@ -558,8 +605,7 @@ export default function MerchantGenerator() {
     // It can differ from the stored value by under a millisecond; the row shows
     // minutes.
     const savedAt = new Date().toISOString();
-    setSaved((current) => current.map((entry) => (entry.id === id ? { ...entry, ...patch, savedAt } : entry)));
-    return null;
+    setSaved((current) => current.map((entry) => (entry.id === openedId ? { ...entry, ...patch, savedAt } : entry)));
   }
 
   /**
@@ -801,7 +847,10 @@ export default function MerchantGenerator() {
     setSession((current) => nextSaveSession(current, { event: "corrected" }));
 
     if (rows !== null && header !== null) {
+      // Transient first, deliberately: if the second write fails, the screen
+      // still survives a reload with the correction on it.
       persist(header, rows, next);
+      autosaveOpened(rows, next);
     }
   }
 
@@ -885,12 +934,13 @@ export default function MerchantGenerator() {
             the notice explaining why it is off, rather than find the control
             missing with no explanation.
 
-            The label names the action, because the GM can see the list and a
-            button that silently adds when they expected an update — or the
-            reverse — is contradicted by what is on screen a moment later. */}
-        {rows !== null && (
+            Gone entirely once a record is open: that merchant saves itself on
+            every correction, so a button here would have nothing to do — and
+            the press that used to append a near-identical copy is no longer
+            reachable at all. */}
+        {rows !== null && session.openedSavedId === null && (
           <Button onClick={handleSave} disabled={session.state !== "armed"} variant="secondary" className="h-11 px-6">
-            {saveButtonLabel(session)}
+            {saveButtonLabel(session.state)}
           </Button>
         )}
       </div>
