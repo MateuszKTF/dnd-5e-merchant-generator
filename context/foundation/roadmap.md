@@ -3,7 +3,7 @@ project: "D&D 5e Merchant Generator"
 version: 1
 status: draft
 created: 2026-09-11
-updated: 2026-09-11
+updated: 2026-09-12
 prd_version: 1
 main_goal: speed
 top_blocker: time
@@ -65,7 +65,7 @@ stało przed nim.
 | S-01 | `first-generated-assortment` | wybrać kategorię i zamożność, kliknąć „Stwórz" i zobaczyć tabelę 10–25 pozycji                 | —                      | US-01, FR-001, FR-002, FR-003, FR-004, FR-005, FR-007, NFR (czytelność na telefonie) | in-progress |
 | S-02 | `manual-item-corrections`   | skorygować cenę lub ilość pozycji i przegenerować listę bez cichej utraty tych korekt          | S-01                   | FR-006, FR-008                                                                  | in-progress |
 | S-03 | `last-merchant-persists`    | zamknąć kartę w środku sesji, wrócić i zastać ostatniego kupca; oznaczyć go jako trwałego       | F-01, S-01, S-02       | US-03, FR-009                                                                   | in-progress |
-| S-04 | `saved-merchants-library`   | odnaleźć zapisanego kupca na liście, otworzyć go i zmienić mu nazwę                            | F-01, S-03             | US-02, FR-010, FR-011                                                           | planning |
+| S-04 | `saved-merchants-library`   | odnaleźć zapisanego kupca na liście, otworzyć go i zmienić mu nazwę                            | F-01, S-03             | US-02, FR-010, FR-011                                                           | in-progress |
 | S-05 | `merchant-search-and-delete` | wyszukać kupca po nazwie i usunąć niepotrzebnego, gdy lista urośnie przez miesiące kampanii    | S-04                   | US-02, FR-012, FR-013                                                           | planning |
 
 ## Streams
@@ -230,7 +230,7 @@ od nowa.
   kawałek jest ważniejszy, niż wygląda. Stoi po `S-03`, bo lista potrzebuje akcji jawnego
   zapisu, żeby miała co pokazywać, i po `F-01`, bo pomyłka w kształcie zapisu zostałaby
   spłacona właśnie tutaj.
-- **Status:** planning
+- **Status:** in-progress
 
 ### S-05: Lista, która wytrzymuje miesiące kampanii
 

@@ -53,8 +53,15 @@ export interface RestoredSession {
 }
 
 /**
- * The last generated merchant, ready to become island state — or `null` when
- * there is nothing to bring back.
+ * A stored merchant, ready to become island state — or `null` when there is
+ * nothing to bring back.
+ *
+ * **Two callers, one rule.** A reload restores the transient record
+ * ({@link restoreFromDocument}); S-04 opens a *saved* one. Both arrive from
+ * `JSON.parse`, so both can carry a category this build no longer knows and
+ * both need `recentIds` reseeded — the normalisation is factored here rather
+ * than duplicated at the second call site, where a divergence would show up as
+ * an opened merchant behaving subtly differently from a restored one.
  *
  * **A stale enum degrades the controls, never the rows.** If a stored
  * `category` or `wealth` is no longer a member of `src/data/items.ts`, only the
@@ -76,8 +83,7 @@ export interface RestoredSession {
  * the product has. Treating it as nothing to restore shows the ordinary empty
  * state instead.
  */
-export function restoreFromDocument(doc: StorageDocument): RestoredSession | null {
-  const merchant = doc.transient;
+export function restoreFromMerchant(merchant: Merchant | null): RestoredSession | null {
   if (merchant === null || !Array.isArray(merchant.rows)) {
     return null;
   }
@@ -98,6 +104,16 @@ export function restoreFromDocument(doc: StorageDocument): RestoredSession | nul
     categoryWasReset,
     wealthWasReset,
   };
+}
+
+/**
+ * The reload path: pull the transient slot out of the document and normalise
+ * it. A thin wrapper on purpose — the rules live in
+ * {@link restoreFromMerchant}, and an absent transient record is just the
+ * `null` argument that function already answers for.
+ */
+export function restoreFromDocument(doc: StorageDocument): RestoredSession | null {
+  return restoreFromMerchant(doc.transient);
 }
 
 /**
@@ -131,13 +147,22 @@ export type SaveState = (typeof SAVE_STATES)[number];
  * mistake this module exists to make impossible: a green "Zapisano" over a
  * merchant that was never written is the PRD's heaviest guardrail violation
  * wearing a checkmark.
+ *
+ * `opened` and `cleared-open` are S-04's: the GM can now bring a *saved*
+ * merchant back onto the page, and while one is open the save button writes to
+ * that record instead of appending a copy. Which record — if any — is open is
+ * not part of {@link SaveState}; it rides alongside it in {@link SaveSession},
+ * because the button's availability and the record it would write are two
+ * different questions with two different answers.
  */
 export const SAVE_EVENTS = [
   "generated",
   "corrected",
   "restored",
+  "opened",
   "promoted",
   "promote-failed",
+  "cleared-open",
   "persistence-off",
 ] as const;
 export type SaveEvent = (typeof SAVE_EVENTS)[number];
@@ -160,6 +185,15 @@ const D = "stood-down";
  *   `saved`, so a failed save can never present as a save that happened.
  * - the `stood-down` row is `D` throughout — nothing leaves it, which is the
  *   absorbing property the `future-version` latch depends on.
+ * - the `cleared-open` column is the **identity**: every row answers with
+ *   itself. Losing the opened record does not change what the button may
+ *   claim — a merchant the GM drew before opening is still on screen and still
+ *   unsaved. The event exists to move {@link SaveSession.openedSavedId}, and
+ *   keeping it inert here is what stops the two concerns entangling.
+ * - `opened` arms exactly like `restored`: a merchant is on screen and the
+ *   button has something to write. It does **not** land on `saved` — no press
+ *   has happened, and `saved` is this module's word for "the last press
+ *   succeeded", not for "what is on screen matches the store".
  *
  * Unreachable cells are filled conservatively rather than left to a fallback:
  * `promoted` from `unavailable` stays `U`, because a promote with nothing
@@ -168,13 +202,97 @@ const D = "stood-down";
  */
 // prettier-ignore
 const SAVE_TRANSITIONS: Record<SaveState, Record<SaveEvent, SaveState>> = {
-  unavailable:  { generated: A, corrected: A, restored: A, promoted: U, "promote-failed": U, "persistence-off": D },
-  "stood-down": { generated: D, corrected: D, restored: D, promoted: D, "promote-failed": D, "persistence-off": D },
-  armed:        { generated: A, corrected: A, restored: A, promoted: S, "promote-failed": A, "persistence-off": D },
-  saved:        { generated: A, corrected: A, restored: A, promoted: S, "promote-failed": S, "persistence-off": D },
+  unavailable:  { generated: A, corrected: A, restored: A, opened: A, promoted: U, "promote-failed": U, "cleared-open": U, "persistence-off": D },
+  "stood-down": { generated: D, corrected: D, restored: D, opened: D, promoted: D, "promote-failed": D, "cleared-open": D, "persistence-off": D },
+  armed:        { generated: A, corrected: A, restored: A, opened: A, promoted: S, "promote-failed": A, "cleared-open": A, "persistence-off": D },
+  saved:        { generated: A, corrected: A, restored: A, opened: A, promoted: S, "promote-failed": S, "cleared-open": S, "persistence-off": D },
 };
 
 /** Apply one event to the save button's state. Total — every cell is filled. */
 export function nextSaveState(current: SaveState, event: SaveEvent): SaveState {
   return SAVE_TRANSITIONS[current][event];
+}
+
+/**
+ * The save button's whole truth: what it may claim, and which record a press
+ * would write.
+ *
+ * `openedSavedId` is `null` unless the GM opened a saved merchant, in which
+ * case a press calls `updateSavedMerchant` on that id instead of
+ * `promoteTransient`. The two live in **one** value, and move through **one**
+ * reducer, because every bug this pair can have is a bug about them
+ * disagreeing:
+ *
+ * - an id that arrives a render late means the first press after opening
+ *   appends a near-identical copy to the list the GM is looking at — the
+ *   duplicate S-04 exists to prevent;
+ * - an id that outlives a fresh draw means the next press overwrites a saved
+ *   merchant with a completely different shop, which is not a duplicate but a
+ *   silent destruction of saved data.
+ *
+ * It is deliberately **not persisted**. The storage format is forward-only
+ * (AGENTS.md), and a UI concern does not earn a field in it — the same trade
+ * F-01 made for the promoted flag. The consequence is that a reload turns an
+ * opened merchant into an ordinary transient one and the next press appends a
+ * copy; that is an accepted, documented limit, not an oversight.
+ */
+export interface SaveSession {
+  readonly state: SaveState;
+  readonly openedSavedId: string | null;
+}
+
+/**
+ * One event, plus the id the `opened` event alone carries.
+ *
+ * A discriminated union rather than an optional second argument: there is no
+ * such thing as opening without a record, and no other event has a record to
+ * name. The compiler refusing `{ event: "opened" }` is the point.
+ */
+export type SaveSessionEvent =
+  | { readonly event: "opened"; readonly savedId: string }
+  | { readonly event: Exclude<SaveEvent, "opened"> };
+
+/**
+ * Which record the next press would write, after this event.
+ *
+ * Only `opened` can produce an id. `generated` clears it **on top of** the
+ * explicit `cleared-open` the draw also fires: a fresh draw is by definition no
+ * longer the opened record, and making that true in the reducer means a call
+ * site that forgets to say so cannot reach the overwrite-a-saved-merchant bug.
+ * Everything else — a correction, a promote, a failed promote, a stand-down —
+ * leaves it alone, because the GM is still looking at the same merchant.
+ */
+function nextOpenedSavedId(current: string | null, next: SaveSessionEvent): string | null {
+  switch (next.event) {
+    case "opened":
+      return next.savedId;
+    case "cleared-open":
+    case "generated":
+      return null;
+    default:
+      return current;
+  }
+}
+
+/** Apply one event to the pair. Both halves move together, or neither does. */
+export function nextSaveSession(current: SaveSession, next: SaveSessionEvent): SaveSession {
+  return {
+    state: nextSaveState(current.state, next.event),
+    openedSavedId: nextOpenedSavedId(current.openedSavedId, next),
+  };
+}
+
+/** What a press would do: update the record the GM has open, or add a new one. */
+export type SaveAction = "update" | "add";
+
+/**
+ * The action the button is about to take — and, in S-04, the action its label
+ * has to name.
+ *
+ * Derived, never stored. With the list on screen a button that silently does
+ * one or the other is contradicted by what the GM can see, so the label reads
+ * from the same value the handler branches on and the two cannot disagree.
+ */
+export function saveActionFor(session: SaveSession): SaveAction {
+  return session.openedSavedId === null ? "add" : "update";
 }

@@ -6,10 +6,15 @@ import type { Merchant, StoredRow } from "./merchant";
 import {
   isKnownCategory,
   isKnownWealth,
+  nextSaveSession,
   nextSaveState,
   restoreFromDocument,
+  restoreFromMerchant,
+  saveActionFor,
   SAVE_EVENTS,
   SAVE_STATES,
+  type SaveSession,
+  type SaveSessionEvent,
   type SaveState,
 } from "./merchant-session";
 import { SCHEMA_VERSION, type StorageDocument } from "./merchant-storage";
@@ -132,6 +137,69 @@ describe("restoreFromDocument", () => {
   });
 });
 
+describe("restoreFromMerchant", () => {
+  // S-04's second caller: a merchant out of the *saved* collection, not the
+  // transient slot. Same bytes, same provenance (`JSON.parse`), so the same
+  // normalisation — factored here rather than duplicated at the open call site,
+  // where a divergence would show up as an opened merchant behaving subtly
+  // differently from a restored one.
+  const saved = merchant({ id: "m-saved", savedAt: "2026-09-11T18:15:00.000Z" });
+
+  it("returns null when there is no merchant to open", () => {
+    expect(restoreFromMerchant(null)).toBeNull();
+  });
+
+  it("returns null when the record has no rows to render", () => {
+    const malformed = { ...saved, rows: undefined as unknown as StoredRow[] };
+
+    expect(restoreFromMerchant(malformed)).toBeNull();
+  });
+
+  it("hands back the saved record untouched, corrections included", () => {
+    // US-02's own criterion: an opened merchant is identical to what was saved.
+    const restored = restoreFromMerchant(saved);
+
+    expect(restored?.merchant).toBe(saved);
+    expect(restored?.merchant.corrections).toEqual({ longsword: { priceGp: 20 } });
+  });
+
+  it("derives both controls from the opened record", () => {
+    const restored = restoreFromMerchant(saved);
+
+    expect(restored?.category).toBe("kowal");
+    expect(restored?.wealth).toBe("bogata");
+  });
+
+  it("normalises an unknown category while keeping the rows intact", () => {
+    const stale = merchant({ category: asCategory("kowalstwo-krasnoludzkie") });
+    const restored = restoreFromMerchant(stale);
+
+    expect(restored?.category).toBe(CATEGORIES[0].id);
+    expect(restored?.categoryWasReset).toBe(true);
+    expect(restored?.merchant.rows).toEqual(ROWS);
+  });
+
+  it("normalises an unknown wealth while keeping the rows intact", () => {
+    const restored = restoreFromMerchant(merchant({ wealth: asWealth("książęca") }));
+
+    expect(restored?.wealth).toBe(WEALTH_LEVELS[0].id);
+    expect(restored?.wealthWasReset).toBe(true);
+    expect(restored?.merchant.rows).toEqual(ROWS);
+  });
+
+  it("seeds recentIds from the opened record's rows", () => {
+    expect(restoreFromMerchant(saved)?.recentIds).toEqual(["longsword", "potion-of-healing"]);
+  });
+
+  it("is what restoreFromDocument does to the transient slot", () => {
+    // The wrapper adds nothing but the field access. Asserting it keeps the two
+    // paths from drifting the day someone adds a rule to one of them.
+    const transient = merchant();
+
+    expect(restoreFromDocument(documentWith(transient))).toEqual(restoreFromMerchant(transient));
+  });
+});
+
 describe("isKnownCategory / isKnownWealth", () => {
   it("accepts every member of the catalog", () => {
     for (const { id } of CATEGORIES) {
@@ -228,6 +296,25 @@ describe("nextSaveState", () => {
     expect(nextSaveState("unavailable", "restored")).toBe("armed");
   });
 
+  it("arms on an open, from every state that can be armed", () => {
+    // Opening puts a merchant on screen, so the button has something to write —
+    // exactly like a restore. It does NOT land on `saved`: no press has
+    // happened, and `saved` is this module's word for "the last press
+    // succeeded".
+    expect(nextSaveState("unavailable", "opened")).toBe("armed");
+    expect(nextSaveState("armed", "opened")).toBe("armed");
+    expect(nextSaveState("saved", "opened")).toBe("armed");
+  });
+
+  it("leaves the button alone when the opened record is dropped", () => {
+    // `cleared-open` moves the id, not the state. The merchant on screen is
+    // still there and still unsaved, so the button must keep claiming what it
+    // claimed a moment ago.
+    for (const state of SAVE_STATES) {
+      expect(nextSaveState(state, "cleared-open")).toBe(state);
+    }
+  });
+
   it("stands persistence down from any state", () => {
     for (const state of SAVE_STATES) {
       expect(nextSaveState(state, "persistence-off")).toBe("stood-down");
@@ -240,6 +327,114 @@ describe("nextSaveState", () => {
     // whose press cannot succeed.
     for (const event of SAVE_EVENTS) {
       expect(nextSaveState("stood-down", event)).toBe("stood-down");
+    }
+  });
+});
+
+describe("nextSaveSession", () => {
+  const fresh: SaveSession = { state: "unavailable", openedSavedId: null };
+  const open: SaveSession = { state: "armed", openedSavedId: "m-saved" };
+
+  /** Every event, in the shape the reducer takes. */
+  const everyEvent: SaveSessionEvent[] = SAVE_EVENTS.map((event) =>
+    event === "opened" ? { event, savedId: "m-opened" } : { event },
+  );
+
+  it("records which saved merchant was opened", () => {
+    const next = nextSaveSession(fresh, { event: "opened", savedId: "m-saved" });
+
+    expect(next.openedSavedId).toBe("m-saved");
+    expect(next.state).toBe("armed");
+  });
+
+  it("keeps the opened record through a correction and a save", () => {
+    // The GM is still looking at that merchant, so a corrected price and the
+    // in-place save that follows both write to the same record. Dropping the id
+    // here would silently turn the next press back into an append.
+    const corrected = nextSaveSession(open, { event: "corrected" });
+    expect(corrected.openedSavedId).toBe("m-saved");
+
+    const promoted = nextSaveSession(corrected, { event: "promoted" });
+    expect(promoted.openedSavedId).toBe("m-saved");
+    expect(promoted.state).toBe("saved");
+  });
+
+  it("leaves a failed in-place write armed, on the same record", () => {
+    // S-03's rule, inherited unchanged: nothing was written, so the button must
+    // still invite the retry — and the retry has to aim at the record the GM
+    // has open, not append a copy of it.
+    const failed = nextSaveSession(open, { event: "promote-failed" });
+
+    expect(failed.state).toBe("armed");
+    expect(failed.openedSavedId).toBe("m-saved");
+  });
+
+  it("clears the opened record on a fresh draw", () => {
+    // The one that destroys data if it is wrong: a draw is no longer the opened
+    // merchant, and an id that outlives it means the next press overwrites a
+    // saved shop with a completely different one.
+    const drawn = nextSaveSession(open, { event: "generated" });
+
+    expect(drawn.openedSavedId).toBeNull();
+    expect(drawn.state).toBe("armed");
+  });
+
+  it("clears the opened record on an explicit cleared-open", () => {
+    expect(nextSaveSession(open, { event: "cleared-open" }).openedSavedId).toBeNull();
+  });
+
+  it("never invents an opened record", () => {
+    // Only `opened` carries an id, so no other event can reach the in-place
+    // branch from a session that has nothing open.
+    for (const event of everyEvent) {
+      if (event.event === "opened") continue;
+
+      expect(nextSaveSession(fresh, event).openedSavedId).toBeNull();
+    }
+  });
+
+  it("moves the state exactly as nextSaveState does", () => {
+    // The pair reducer adds the id; it must not quietly acquire a second
+    // opinion about the button.
+    for (const state of SAVE_STATES) {
+      for (const event of everyEvent) {
+        expect(nextSaveSession({ state, openedSavedId: "m-saved" }, event).state).toBe(
+          nextSaveState(state, event.event),
+        );
+      }
+    }
+  });
+
+  it("answers for every event from every state", () => {
+    const results = SAVE_STATES.flatMap((state) =>
+      everyEvent.map((event) => nextSaveSession({ state, openedSavedId: null }, event)),
+    );
+
+    // The count is asserted, not just the membership: a reducer with a hole
+    // would produce `undefined` and still satisfy a loop that never checks it ran.
+    expect(results).toHaveLength(SAVE_STATES.length * SAVE_EVENTS.length);
+    for (const result of results) {
+      expect(SAVE_STATES).toContain(result.state);
+    }
+  });
+});
+
+describe("saveActionFor", () => {
+  it("adds a new merchant when nothing is open", () => {
+    expect(saveActionFor({ state: "armed", openedSavedId: null })).toBe("add");
+  });
+
+  it("updates the open merchant in place", () => {
+    expect(saveActionFor({ state: "armed", openedSavedId: "m-saved" })).toBe("update");
+  });
+
+  it("depends on the opened record alone, not on the button's state", () => {
+    // The label and the handler read the same value, so they cannot disagree
+    // about which action a press takes — with the list on screen, a button that
+    // says one thing and does the other is contradicted by what the GM can see.
+    for (const state of SAVE_STATES) {
+      expect(saveActionFor({ state, openedSavedId: "m-saved" })).toBe("update");
+      expect(saveActionFor({ state, openedSavedId: null })).toBe("add");
     }
   });
 });
