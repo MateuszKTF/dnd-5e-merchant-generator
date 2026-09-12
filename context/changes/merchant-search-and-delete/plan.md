@@ -425,11 +425,11 @@ plans is re-planned, that is the file to check.
 
 #### Automated
 
-- [x] 1.1 Unit tests pass: `npm test`
-- [x] 1.2 Type checking passes: `npx astro check`
-- [x] 1.3 Production build succeeds: `npm run build`
-- [x] 1.4 Route still prerendered: `index.html` under `dist/client/`
-- [x] 1.6 Linting passes: `npm run lint`
+- [x] 1.1 Unit tests pass: `npm test` — d42b7d0
+- [x] 1.2 Type checking passes: `npx astro check` — d42b7d0
+- [x] 1.3 Production build succeeds: `npm run build` — d42b7d0
+- [x] 1.4 Route still prerendered: `index.html` under `dist/client/` — d42b7d0
+- [x] 1.6 Linting passes: `npm run lint` — d42b7d0
 
 #### Manual
 
@@ -446,10 +446,10 @@ plans is re-planned, that is the file to check.
 
 #### Automated
 
-- [ ] 2.1 Unit tests pass including the explicit `ł` case: `npm test`
-- [ ] 2.2 Type checking passes: `npx astro check`
-- [ ] 2.3 Production build succeeds: `npm run build`
-- [ ] 2.4 Linting passes: `npm run lint`
+- [x] 2.1 Unit tests pass including the explicit `ł` case: `npm test`
+- [x] 2.2 Type checking passes: `npx astro check`
+- [x] 2.3 Production build succeeds: `npm run build`
+- [x] 2.4 Linting passes: `npm run lint`
 
 #### Manual
 

@@ -156,18 +156,106 @@ export interface LibraryRow {
  * says what kind of shop it is.
  */
 export function libraryRow(merchant: Merchant): LibraryRow {
-  const label = CATEGORIES.find((entry) => entry.id === merchant.category)?.label ?? merchant.category;
-
   return {
     id: merchant.id,
     name: merchant.name,
-    categoryLabel: label,
+    categoryLabel: categoryLabelFor(merchant),
     // `rows` is denormalized and self-contained (F-01), so the count needs no
     // catalog. The guard is for a hand-edited record, where `.length` on an
     // absent array would throw inside a render.
     itemCount: Array.isArray(merchant.rows) ? merchant.rows.length : 0,
     savedAtLabel: formatSavedAt(merchant.savedAt),
   };
+}
+
+/**
+ * The merchant's kind, in the GM's language.
+ *
+ * Falls back to the stored id when this build no longer knows the category,
+ * exactly as `autoName` does — and shared by the row projection and the search
+ * matcher so a merchant is never displayed under one label and searched under
+ * another.
+ */
+function categoryLabelFor(merchant: Merchant): string {
+  return CATEGORIES.find((entry) => entry.id === merchant.category)?.label ?? merchant.category;
+}
+
+/** Combining marks — what `NFD` splits an accented letter into. */
+const COMBINING_MARKS = /\p{M}/gu;
+
+/**
+ * Both sides of a search comparison, reduced to the same shape.
+ *
+ * A GM searching at the table types one-handed on a phone and will not reach
+ * for the diacritic keys. "kuznia" has to find "Kuźnia", so the query and the
+ * stored name are both routed through **this one function** — normalizing one
+ * side and not the other silently under-matches, and the bug presents as
+ * "search is flaky" rather than as a rule that is wrong.
+ *
+ * **`ł` needs its own line, and that is the whole trick here.** Every other
+ * Polish diacritic — ą ć ę ń ó ś ź ż — is a base letter plus a combining mark,
+ * so `NFD` splits it and stripping marks leaves the bare letter. `ł` (U+0142)
+ * is a *distinct letter* with no canonical decomposition: `NFD` leaves it
+ * untouched, and an implementation that stops at marks would make every
+ * `ł`-named merchant permanently unfindable while appearing to work on every
+ * other test. See `merchant-library.test.ts`, where it is asserted on its own.
+ */
+export function normalizeForSearch(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(COMBINING_MARKS, "")
+      .replace(/[łŁ]/gu, "l")
+      // After `toLowerCase` only the lowercase form survives, but both are listed:
+      // this line is the rule, and it should read as the rule even out of order.
+      .replace(/\s+/gu, " ")
+      .trim()
+  );
+}
+
+/**
+ * Does this merchant answer the query?
+ *
+ * Matches the name **and the category label**, because FR-010 otherwise blinds
+ * category-shaped searching: an auto-name carries "Kowal", and the moment the
+ * GM renames that shop to "Kuźnia u Borysa" a name-only search stops finding it
+ * by kind. The two requirements would quietly undercut each other.
+ *
+ * The query arrives already normalized — once per keystroke at the caller,
+ * rather than once per row here.
+ */
+export function matchesQuery(merchant: Merchant, normalizedQuery: string, categoryLabel: string): boolean {
+  if (normalizedQuery === "") {
+    return true;
+  }
+
+  return (
+    normalizeForSearch(merchant.name).includes(normalizedQuery) ||
+    normalizeForSearch(categoryLabel).includes(normalizedQuery)
+  );
+}
+
+/**
+ * The list the panel shows: every match, newest first.
+ *
+ * Ordering is {@link sortForLibrary}'s, applied before filtering so a narrowed
+ * list reads the same way as the full one. **Every** match is returned —
+ * duplicate names are permitted by design, so presenting one and hiding the
+ * other would hide exactly the record the GM was looking for.
+ *
+ * An empty or whitespace-only query is not a filter that matches nothing; it is
+ * the absence of a filter, and returns the whole list.
+ */
+export function filterMerchants(merchants: readonly Merchant[], query: string): Merchant[] {
+  const sorted = sortForLibrary(merchants);
+  const normalized = normalizeForSearch(query);
+
+  if (normalized === "") {
+    return sorted;
+  }
+
+  return sorted.filter((merchant) => matchesQuery(merchant, normalized, categoryLabelFor(merchant)));
 }
 
 function pad2(value: number): string {

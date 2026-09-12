@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import { CATEGORIES, type CategoryId } from "@/data/items";
 
-import { libraryRow, MAX_NAME_LENGTH, normalizeName, sortForLibrary } from "./merchant-library";
+import {
+  filterMerchants,
+  libraryRow,
+  matchesQuery,
+  MAX_NAME_LENGTH,
+  normalizeForSearch,
+  normalizeName,
+  sortForLibrary,
+} from "./merchant-library";
 import type { Merchant, StoredRow } from "./merchant";
 
 const ROWS: StoredRow[] = [
@@ -226,5 +234,142 @@ describe("libraryRow", () => {
     const malformed = { ...merchant(), rows: undefined as unknown as StoredRow[] };
 
     expect(libraryRow(malformed).itemCount).toBe(0);
+  });
+});
+
+describe("normalizeForSearch", () => {
+  it("folds case", () => {
+    expect(normalizeForSearch("KUŹNIA u Borysa")).toBe(normalizeForSearch("kuźnia U BORYSA"));
+  });
+
+  it("strips every Polish diacritic that decomposes", () => {
+    // ą ć ę ń ó ś ź ż are all a base letter plus a combining mark, so NFD plus
+    // mark-stripping reduces each to the bare letter.
+    expect(normalizeForSearch("ąćęńóśźż")).toBe("acenoszz");
+  });
+
+  it("strips ł and Ł, which do NOT decompose under NFD", () => {
+    // The case the whole function exists for. U+0142 and U+0141 are distinct
+    // letters with no canonical decomposition, so an NFD-and-marks
+    // implementation leaves them intact and every ł-named merchant becomes
+    // unfindable — while passing every other test in this block.
+    expect(normalizeForSearch("Łuk")).toBe("luk");
+    expect(normalizeForSearch("kowal Wściekły")).toBe("kowal wsciekly");
+  });
+
+  it("proves NFD alone would not have stripped it", () => {
+    // The guard on the guard: if this ever comes back false, `ł` decomposes
+    // after all and the explicit mapping above is dead code rather than the
+    // load-bearing line it is documented as.
+    expect("Ł".normalize("NFD").replace(/\p{M}/gu, "")).toBe("Ł");
+  });
+
+  it("collapses whitespace and trims", () => {
+    expect(normalizeForSearch("  kuźnia   u\tBorysa \n")).toBe("kuznia u borysa");
+  });
+
+  it("answers for an empty string", () => {
+    expect(normalizeForSearch("")).toBe("");
+    expect(normalizeForSearch("   ")).toBe("");
+  });
+});
+
+describe("matchesQuery", () => {
+  const kowal = merchant({ name: "Kuźnia u Borysa", category: "kowal" });
+
+  it("matches on the name", () => {
+    expect(matchesQuery(kowal, "borysa", "Kowal")).toBe(true);
+  });
+
+  it("matches on the category label", () => {
+    // The renamed-merchant case: "Kuźnia u Borysa" contains no "kowal", so
+    // without the category arm FR-010 would blind FR-012.
+    expect(matchesQuery(kowal, "kowal", "Kowal")).toBe(true);
+  });
+
+  it("rejects a query matching neither", () => {
+    expect(matchesQuery(kowal, "alchemik", "Kowal")).toBe(false);
+  });
+
+  it("treats an empty query as no filter at all", () => {
+    expect(matchesQuery(kowal, "", "Kowal")).toBe(true);
+  });
+});
+
+describe("filterMerchants", () => {
+  const kuznia = merchant({
+    id: "m-kuznia",
+    name: "Kuźnia u Borysa",
+    category: "kowal",
+    savedAt: "2026-09-12T10:00:00.000Z",
+  });
+  const luk = merchant({
+    id: "m-luk",
+    name: "Łuk i Cięciwa",
+    category: "towary-ogolne",
+    savedAt: "2026-09-11T10:00:00.000Z",
+  });
+  const mikstury = merchant({
+    id: "m-mikstury",
+    name: "Mikstury Weroniki",
+    category: "alchemik",
+    savedAt: "2026-09-10T10:00:00.000Z",
+  });
+  const all = [mikstury, kuznia, luk];
+
+  it("returns everything for an empty query", () => {
+    expect(filterMerchants(all, "")).toHaveLength(all.length);
+  });
+
+  it("returns everything for a whitespace-only query", () => {
+    // Not "a filter that matches nothing" — the absence of a filter.
+    expect(filterMerchants(all, "   ")).toHaveLength(all.length);
+  });
+
+  it("finds a diacritic-bearing name from a diacritic-free query", () => {
+    // The one-handed-at-the-table case: nobody reaches for the ź key.
+    expect(filterMerchants(all, "kuznia").map((entry) => entry.id)).toEqual(["m-kuznia"]);
+  });
+
+  it("finds an ł-bearing name by typing l", () => {
+    expect(filterMerchants(all, "luk").map((entry) => entry.id)).toEqual(["m-luk"]);
+  });
+
+  it("finds a diacritic-free name from a diacritic-bearing query", () => {
+    // The reverse also has to hold: both sides go through one normalizer.
+    expect(filterMerchants(all, "Łuk").map((entry) => entry.id)).toEqual(["m-luk"]);
+  });
+
+  it("finds a merchant renamed away from its category, by its category", () => {
+    // "Kuźnia u Borysa" carries no "kowal" — FR-010 renamed it away. The
+    // category arm is what keeps FR-012 working after a rename.
+    expect(filterMerchants(all, "kowal").map((entry) => entry.id)).toEqual(["m-kuznia"]);
+  });
+
+  it("returns both merchants when two share a name", () => {
+    // S-04 permits duplicates, so search must present every match rather than
+    // assume there is one to find.
+    const twin = merchant({ id: "m-twin", name: "Kuźnia u Borysa", savedAt: "2026-09-09T10:00:00.000Z" });
+
+    expect(filterMerchants([...all, twin], "kuznia").map((entry) => entry.id)).toEqual(["m-kuznia", "m-twin"]);
+  });
+
+  it("returns an empty array when nothing matches", () => {
+    expect(filterMerchants(all, "nekromanta")).toEqual([]);
+  });
+
+  it("keeps sortForLibrary's order", () => {
+    // Filtering narrows the list; it must not reorder what survives, or a
+    // narrowed panel would read differently from the full one.
+    expect(filterMerchants(all, "").map((entry) => entry.id)).toEqual(sortForLibrary(all).map((entry) => entry.id));
+  });
+
+  it("leaves the input array untouched", () => {
+    const input = [...all];
+    const before = input.map((entry) => entry.id);
+
+    filterMerchants(input, "kuznia");
+
+    expect(input.map((entry) => entry.id)).toEqual(before);
   });
 });

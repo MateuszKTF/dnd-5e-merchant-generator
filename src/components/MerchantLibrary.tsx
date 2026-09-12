@@ -2,7 +2,7 @@ import { Trash2 } from "lucide-react";
 import { useRef, useState, type KeyboardEvent } from "react";
 
 import type { Merchant } from "@/lib/merchant";
-import { libraryRow, normalizeName, sortForLibrary } from "@/lib/merchant-library";
+import { filterMerchants, libraryRow, normalizeName } from "@/lib/merchant-library";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -41,7 +41,13 @@ interface Props {
 export default function MerchantLibrary({ saved, openedSavedId, onOpen, onRename, onDelete }: Props) {
   const [expanded, setExpanded] = useState(false);
 
-  const merchants = sortForLibrary(saved);
+  // View state, and deliberately nothing more: the query is not merchant data,
+  // so it is not persisted and never reaches F-01's document. A reload opens a
+  // fresh, unfiltered panel, which is the right default for a GM coming back.
+  const [query, setQuery] = useState("");
+
+  const merchants = filterMerchants(saved, query);
+  const filtering = query.trim() !== "";
 
   return (
     <section aria-label="Zapisani kupcy" className="mt-4">
@@ -70,10 +76,41 @@ export default function MerchantLibrary({ saved, openedSavedId, onOpen, onRename
       {/* `hidden` rather than an unmounted branch: `aria-controls` above has to
           point at an element that exists whether or not the panel is open. */}
       <div id="merchant-library-panel" hidden={!expanded}>
-        {merchants.length === 0 ? (
+        {/* Only once there is something to search through. A filter over an
+            empty library is a control that can do nothing. */}
+        {saved.length > 0 && (
+          <div className="mt-2">
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => {
+                setQuery(event.target.value);
+              }}
+              aria-label="Szukaj kupca"
+              placeholder="Szukaj po nazwie lub rodzaju"
+              // `type="search"` brings the browser's own clear affordance, and
+              // h-11 keeps the field a comfortable tap target at 360 px.
+              className="h-11 w-full rounded-md border border-neutral-300 bg-white px-3"
+            />
+
+            {/* Said out loud while filtering, because the panel is showing a
+                subset and the header's total would otherwise contradict it. */}
+            {filtering && (
+              <p className="mt-1 text-xs text-neutral-500" role="status">
+                {merchants.length} z {saved.length}
+              </p>
+            )}
+          </div>
+        )}
+
+        {saved.length === 0 ? (
           <p className="mt-2 text-sm text-neutral-600">
             Nie masz jeszcze zapisanych kupców. Kliknij „Zapisz”, żeby zachować tego z ekranu.
           </p>
+        ) : merchants.length === 0 ? (
+          // A filtered-to-nothing panel is not the same as an empty library,
+          // and must not look like one — the GM's merchants are still there.
+          <p className="mt-2 text-sm text-neutral-600">Żaden kupiec nie pasuje do „{query.trim()}”.</p>
         ) : (
           <ul className="mt-2 flex flex-col gap-1">
             {merchants.map((merchant) => (
