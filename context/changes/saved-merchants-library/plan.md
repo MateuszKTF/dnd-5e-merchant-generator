@@ -514,8 +514,8 @@ nothing here edits them.
 
 #### Manual
 
-- [ ] 1.5 `updateSavedMerchant` reads as unable to change a merchant's identity
-- [ ] 1.6 Save-state rules make clear when Zapisz updates versus adds
+- [x] 1.5 `updateSavedMerchant` reads as unable to change a merchant's identity
+- [x] 1.6 Save-state rules make clear when Zapisz updates versus adds
 
 ### Phase 2: List panel and open
 
@@ -529,15 +529,15 @@ nothing here edits them.
 
 #### Manual
 
-- [ ] 2.6 Two saved merchants appear newest-first without a reload
-- [ ] 2.7 Rows show name, category, item count and save time; name truncates
-- [ ] 2.8 Opening restores rows, corrections (still marked) and controls
-- [ ] 2.9 Opening with corrections confirms; cancel changes nothing; confirm opens
-- [ ] 2.10 Opening with no corrections opens with no dialog
-- [ ] 2.11 The opened row is visibly marked
-- [ ] 2.12 Stwórz after opening produces a new shop and clears the opened marking
-- [ ] 2.13 Panel collapsed by default; assortment above the fold at 360 px
-- [ ] 2.14 Reload after opening restores the opened merchant, not the previous one
+- [x] 2.6 Two saved merchants appear newest-first without a reload
+- [x] 2.7 Rows show name, category, item count and save time; name truncates
+- [x] 2.8 Opening restores rows, corrections (still marked) and controls
+- [x] 2.9 Opening with corrections confirms; cancel changes nothing; confirm opens
+- [x] 2.10 Opening with no corrections opens with no dialog
+- [x] 2.11 The opened row is visibly marked
+- [x] 2.12 Stwórz after opening produces a new shop and clears the opened marking
+- [x] 2.13 Panel collapsed by default; assortment above the fold at 360 px
+- [x] 2.14 Reload after opening restores the opened merchant, not the previous one
 
 ### Phase 3: Inline rename and save-in-place
 
@@ -550,13 +550,13 @@ nothing here edits them.
 
 #### Manual
 
-- [ ] 3.5 Rename persists across a reload
-- [ ] 3.6 Clearing a name restores the previous one
-- [ ] 3.7 Two merchants can share a name and stay distinguishable
-- [ ] 3.8 Open, correct, Zapisz updates in place — one entry, correction present on reopen
-- [ ] 3.9 The button's label says whether it will update or add
-- [ ] 3.10 Stwórz then Zapisz adds a new merchant, leaving the opened one untouched
-- [ ] 3.11 Storage blocked: rename and in-place save both surface a notice, nothing lost
-- [ ] 3.12 Save, reload, open: assortment and corrections identical to what was saved (US-02)
-- [ ] 3.13 In-place save moves the row to the top; opened-row marking keeps it findable
-- [ ] 3.14 Rename and open comfortable at 360 px
+- [x] 3.5 Rename persists across a reload
+- [x] 3.6 Clearing a name restores the previous one
+- [x] 3.7 Two merchants can share a name and stay distinguishable
+- [x] 3.8 Open, correct, Zapisz updates in place — one entry, correction present on reopen
+- [x] 3.9 The button's label says whether it will update or add
+- [x] 3.10 Stwórz then Zapisz adds a new merchant, leaving the opened one untouched
+- [x] 3.11 Storage blocked: rename and in-place save both surface a notice, nothing lost
+- [x] 3.12 Save, reload, open: assortment and corrections identical to what was saved (US-02)
+- [x] 3.13 In-place save moves the row to the top; opened-row marking keeps it findable
+- [x] 3.14 Rename and open comfortable at 360 px
