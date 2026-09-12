@@ -369,10 +369,10 @@ jawnego zapisu z S-04. Oba są opisane w `change.md` z uzasadnieniem, żeby nie 
 
 #### Automated
 
-- [x] 2.1 Unit tests pass: `npm test`
-- [x] 2.2 Type checking passes: `npx astro check`
-- [x] 2.3 Production build succeeds: `npm run build`
-- [x] 2.4 Linting passes: `npm run lint`
+- [x] 2.1 Unit tests pass: `npm test` — e5575a0
+- [x] 2.2 Type checking passes: `npx astro check` — e5575a0
+- [x] 2.3 Production build succeeds: `npm run build` — e5575a0
+- [x] 2.4 Linting passes: `npm run lint` — e5575a0
 
 #### Manual
 
