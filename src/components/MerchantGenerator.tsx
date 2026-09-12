@@ -20,6 +20,7 @@ import {
 import {
   nextSaveSession,
   openedSavedIdFor,
+  wouldLoseCorrections,
   restoreFromDocument,
   restoreFromMerchant,
   type RestoredSession,
@@ -162,21 +163,21 @@ function toStoredCorrections(corrections: CorrectionMap): StoredCorrections {
 }
 
 /**
- * Which notice a failed write or a failed save earns, or `null` when the reason
- * is already on screen.
+ * Why a write did not land.
  *
- * Shared by `putTransient` and `promoteTransient` because their failure modes
- * are the same store's, and a GM does not care which call discovered it.
- */
-/**
- * Why a write did not land, or `null` when it did.
- *
- * `promoteTransient`, `updateSavedMerchant` and `renameMerchant` all fail in
- * exactly these four ways, so the three save paths share one vocabulary and one
- * notice mapping instead of each inventing their own.
+ * `putTransient`, `promoteTransient`, `updateSavedMerchant`, `renameMerchant`
+ * and `deleteMerchant` all fail in exactly these four ways, so every write path
+ * shares one vocabulary and one notice mapping instead of each inventing its own.
  */
 type WriteFailure = Exclude<PromoteResult["status"], "ok">;
 
+/**
+ * Which notice a failed write earns, or `null` when the reason is already on
+ * screen.
+ *
+ * The failure modes are the same store's whichever call discovered them, and a
+ * GM does not care which one did.
+ */
 function conditionFromFailure(status: WriteFailure): StorageCondition | null {
   switch (status) {
     case "unavailable":
@@ -441,6 +442,43 @@ export default function MerchantGenerator() {
   }, [adopt, handleFailedRead, rows, corrections]);
 
   /**
+   * Commit a half-typed edit before the page goes away.
+   *
+   * `PriceQuantityCell` commits on blur, and neither a reload from inside the
+   * field nor a mobile OS suspending a backgrounded tab fires one — so the edit
+   * the GM can plainly see would simply not exist on the way back. Blurring the
+   * active element runs the **existing** commit path rather than adding a second
+   * one, so the two can never drift; `localStorage` writes synchronously, so the
+   * save lands before the page is gone.
+   *
+   * `visibilitychange` also fires on an ordinary tab switch, which means an edit
+   * commits sooner than the GM might expect. With corrections saving themselves
+   * that is the direction of travel anyway.
+   */
+  useEffect(() => {
+    function commitActiveEdit() {
+      const active = document.activeElement;
+      if (active instanceof HTMLElement) {
+        active.blur();
+      }
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        commitActiveEdit();
+      }
+    }
+
+    window.addEventListener("pagehide", commitActiveEdit);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener("pagehide", commitActiveEdit);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, []);
+
+  /**
    * Write the merchant now on screen into the transient slot.
    *
    * Called imperatively from the two action sites and from nowhere else. The
@@ -629,6 +667,18 @@ export default function MerchantGenerator() {
   }
 
   /**
+   * Would replacing what is on screen destroy something unrecoverable?
+   *
+   * Asked by both replacement paths, so they cannot disagree. An open record
+   * saves every correction the moment it is committed, so replacing it costs
+   * nothing — the dialog stays out of the way and keeps its credibility for the
+   * case where work really does vanish.
+   */
+  function losesWork(): boolean {
+    return wouldLoseCorrections(rows !== null && hasCorrections(rows, corrections), session.openedSavedId);
+  }
+
+  /**
    * Every path into a row replacement goes through here.
    *
    * The guard is on the Generate *action*, not on whether category or wealth
@@ -637,7 +687,7 @@ export default function MerchantGenerator() {
    * as thoroughly, and the guardrail does not distinguish.
    */
   function handleGenerate() {
-    if (rows !== null && hasCorrections(rows, corrections)) {
+    if (losesWork()) {
       setPending({ kind: "generate" });
       return;
     }
@@ -655,7 +705,7 @@ export default function MerchantGenerator() {
    * the work is a different thing.
    */
   function handleOpen(merchant: Merchant) {
-    if (rows !== null && hasCorrections(rows, corrections)) {
+    if (losesWork()) {
       setPending({ kind: "open", merchant });
       return;
     }

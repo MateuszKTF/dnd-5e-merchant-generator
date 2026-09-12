@@ -5,8 +5,6 @@ interface Props {
   readonly value: number;
   /** Static suffix rendered beside the field. Omitted for quantity. */
   readonly unit?: string;
-  /** Whether this cell differs from the generated value. Drives the marker. */
-  readonly corrected: boolean;
   /** Accessible name identifying the column and the row, e.g. "Cena — Bag of Holding". */
   readonly label: string;
   /** Turns the raw draft into a committable value, or `null` if it is unusable. */
@@ -32,6 +30,13 @@ interface Props {
  * behaviour — a GM who learns that Escape abandons an edit in one column is
  * right about the other.
  *
+ * **A corrected cell is no longer marked.** S-02 gave it an amber dashed
+ * underline meaning "you set this, not the generator". Amber is also this app's
+ * colour for storage trouble, so it read as a warning — and once corrections
+ * save themselves, the other available reading ("unsaved") became flatly false.
+ * The distinction between drawn and hand-set values is gone from the table with
+ * it; that is the accepted cost, decided 2026-09-12.
+ *
  * The in-progress text is held here as a **local draft** and only committed on
  * blur or Enter. That is what makes snap-back possible: without it, typing `2`
  * on the way to `20` would already have been written to the correction overlay,
@@ -40,7 +45,6 @@ interface Props {
 export default function PriceQuantityCell({
   value,
   unit,
-  corrected,
   label,
   validate,
   onCommit,
@@ -86,9 +90,7 @@ export default function PriceQuantityCell({
         type="number"
         inputMode={inputMode}
         step={step}
-        // The corrected state rides along in the accessible name, so a screen
-        // reader user learns about their own edits without seeing the marker.
-        aria-label={corrected ? `${label} (skorygowano)` : label}
+        aria-label={label}
         value={draft ?? String(value)}
         onChange={(event) => {
           setDraft(event.target.value);
@@ -112,12 +114,6 @@ export default function PriceQuantityCell({
           "focus:border-neutral-400 focus:bg-white focus:outline-none",
           // Spin buttons would eat the width the price column needs at 360 px.
           "[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
-          // The marker. Dashed underline first — a shape, legible to someone who
-          // cannot separate the amber from the surrounding text — with colour and
-          // weight only reinforcing it.
-          corrected
-            ? "border-b-amber-600 font-medium underline decoration-amber-600 decoration-dashed underline-offset-4"
-            : "",
           className ?? "",
         ].join(" ")}
       />

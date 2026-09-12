@@ -9,6 +9,7 @@ import {
   nextSaveSession,
   nextSaveState,
   openedSavedIdFor,
+  wouldLoseCorrections,
   restoreFromDocument,
   restoreFromMerchant,
   SAVE_EVENTS,
@@ -464,5 +465,25 @@ describe("openedSavedIdFor", () => {
     const promotedCopy = merchant({ id: "m-new", savedAt: "2026-09-12T10:00:00.000Z" });
 
     expect(openedSavedIdFor(documentOf(transient, [promotedCopy]))).toBeNull();
+  });
+});
+
+describe("wouldLoseCorrections", () => {
+  it("is true only when corrections live nowhere but the screen", () => {
+    // The one case the dialog exists for: hand edits on a merchant that is not
+    // in the library, so a draw or an open really does destroy them.
+    expect(wouldLoseCorrections(true, null)).toBe(true);
+  });
+
+  it("is false while a saved record is open", () => {
+    // The lie this replaces. An open record auto-saves every correction, so
+    // nothing is lost by replacing what is on screen — and a warning that cries
+    // wolf trains the GM to dismiss the one that matters.
+    expect(wouldLoseCorrections(true, "m-saved")).toBe(false);
+  });
+
+  it("is false when there are no corrections at all", () => {
+    expect(wouldLoseCorrections(false, null)).toBe(false);
+    expect(wouldLoseCorrections(false, "m-saved")).toBe(false);
   });
 });

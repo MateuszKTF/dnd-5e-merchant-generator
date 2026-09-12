@@ -349,11 +349,11 @@ jawnego zapisu z S-04. Oba są opisane w `change.md` z uzasadnieniem, żeby nie 
 
 #### Automated
 
-- [x] 1.1 Unit tests pass: `npm test`
-- [x] 1.2 Type checking passes: `npx astro check`
-- [x] 1.3 Production build succeeds: `npm run build`
-- [x] 1.4 Route still prerendered: `index.html` under `dist/client/`
-- [x] 1.5 Linting passes: `npm run lint`
+- [x] 1.1 Unit tests pass: `npm test` — c511e47
+- [x] 1.2 Type checking passes: `npx astro check` — c511e47
+- [x] 1.3 Production build succeeds: `npm run build` — c511e47
+- [x] 1.4 Route still prerendered: `index.html` under `dist/client/` — c511e47
+- [x] 1.5 Linting passes: `npm run lint` — c511e47
 
 #### Manual
 
@@ -369,10 +369,10 @@ jawnego zapisu z S-04. Oba są opisane w `change.md` z uzasadnieniem, żeby nie 
 
 #### Automated
 
-- [ ] 2.1 Unit tests pass: `npm test`
-- [ ] 2.2 Type checking passes: `npx astro check`
-- [ ] 2.3 Production build succeeds: `npm run build`
-- [ ] 2.4 Linting passes: `npm run lint`
+- [x] 2.1 Unit tests pass: `npm test`
+- [x] 2.2 Type checking passes: `npx astro check`
+- [x] 2.3 Production build succeeds: `npm run build`
+- [x] 2.4 Linting passes: `npm run lint`
 
 #### Manual
 

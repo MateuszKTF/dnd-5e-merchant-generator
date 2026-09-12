@@ -3,7 +3,6 @@ import type { AssortmentRow } from "@/lib/assortment";
 import {
   clampPriceGp,
   clampQuantity,
-  isCorrected,
   mergeCorrections,
   parseDraft,
   priceInUnit,
@@ -62,8 +61,6 @@ export default function MerchantTable({ rows, corrections, onCorrect }: Props) {
         <tbody>
           {rows.map((generated, index) => {
             const row = merged[index];
-            const correction = corrections[generated.itemId];
-            const flags = isCorrected(generated, correction);
 
             // Pinned to the GENERATED price and held for the row's lifetime.
             // Deriving it from the corrected value would flip the unit under
@@ -78,7 +75,6 @@ export default function MerchantTable({ rows, corrections, onCorrect }: Props) {
                 <td className="w-px py-2 pr-3 text-right whitespace-nowrap">
                   <PriceQuantityCell
                     value={row.quantity}
-                    corrected={flags.quantity}
                     // The table is the only component that knows the item name,
                     // so it supplies the name that tells 50 otherwise identical
                     // spin buttons apart.
@@ -96,7 +92,6 @@ export default function MerchantTable({ rows, corrections, onCorrect }: Props) {
                   <PriceQuantityCell
                     value={priceInUnit(row.priceGp, unit)}
                     unit={unit}
-                    corrected={flags.price}
                     label={`Cena — ${generated.name}`}
                     inputMode="decimal"
                     step="any"

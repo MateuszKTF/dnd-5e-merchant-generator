@@ -299,6 +299,22 @@ export function nextSaveSession(current: SaveSession, next: SaveSessionEvent): S
  * Returning `null` is the ordinary case: a freshly drawn merchant has an id
  * nothing else shares.
  */
+/**
+ * Is the GM about to lose work that nothing can give back?
+ *
+ * The guard used to ask `hasCorrections` alone — "does this merchant carry hand
+ * edits" — and fired over a record whose edits were already safely in the
+ * library. An ostrzeżenie that cries wolf trains the GM to dismiss it, and then
+ * it fails on the one occasion that mattered.
+ *
+ * The real question has two halves: there are corrections, **and** they live
+ * nowhere but this screen. An open record auto-saves every correction, so
+ * replacing what is on screen costs nothing.
+ */
+export function wouldLoseCorrections(hasCorrections: boolean, openedSavedId: string | null): boolean {
+  return hasCorrections && openedSavedId === null;
+}
+
 export function openedSavedIdFor(doc: StorageDocument): string | null {
   const transient = doc.transient;
   if (transient === null) {
