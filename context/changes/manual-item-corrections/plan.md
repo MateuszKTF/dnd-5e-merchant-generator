@@ -90,6 +90,14 @@ can see what they changed. Quantity works the same way, and setting a quantity t
 shelf the players cleared out. Typing nonsense or clearing a field restores the previous value
 rather than breaking the table.
 
+> **Reversed 2026-09-12 — the marker is gone.** `corrections-autosave` removed the
+> corrected-cell marker in `e5575a0`: amber is also this app's `StorageNotice` colour, so the
+> marker read as a warning, and once corrections save themselves the other available reading
+> ("unsaved") became flatly false. Decision and rationale:
+> `context/changes/corrections-autosave/change.md:79` and that slice's plan, § "Marker znika".
+> Everything else in this paragraph still holds. `isCorrected` stays in `corrections.ts` — it is
+> what `hasCorrections` is built on, and the FR-006 guard still runs on it.
+
 When they then press "Stwórz" — for any category, not just the same one — a dialog asks
 whether to discard the corrections. Cancelling leaves the table exactly as it was. Confirming
 replaces it with a fresh shop. If they have made no corrections, or edited a value back to its
@@ -105,7 +113,9 @@ confirms the inputs are usable and the dialog cannot be bypassed.
   (`merchant-storage-contract`) owns the stored shape and S-03 (`last-merchant-persists`) owns
   persistence — including making corrections survive a closed tab (US-03) and a save (US-02).
   This slice leaves the overlay in memory; F-01 persists generated rows plus the overlay, so
-  the corrected-cell marker survives a reload once S-03 lands.
+  the corrected-cell marker survives a reload once S-03 lands. *(Moot since 2026-09-12 — the
+  marker was removed in `e5575a0`. The overlay still persists; there is simply nothing marking
+  it in the table.)*
 - **No revert affordance** — no per-row undo, no revert-all. The PRD does not ask for it and
   the roadmap names this slice the first scope-cut candidate. The overlay makes it near-trivial
   to add later.
@@ -160,6 +170,18 @@ button not working.
 guardrail is only closed if *every* path into a row replacement is gated. Check Generate after
 changing category, after changing wealth, and with the same inputs unchanged.
 
+> **Accepted exception (2026-09-12, impl review): the cross-tab path is not gated.** S-03 added a
+> `storage` listener that adopts a document written by another tab
+> (`MerchantGenerator.tsx:431-435`), which replaces rows *and* corrections. It cannot be gated: the
+> replacement originates in another tab, there is no user gesture here to interrupt, and a modal
+> asking permission to accept a change that has already happened in storage would be asking the
+> wrong question. It is covered instead by an after-the-fact `superseded` notice — the GM is told
+> the corrections are gone rather than asked first.
+>
+> This is the one deliberate carve-out from "every path". The two paths driven by a user gesture on
+> this screen — Generate and opening a saved merchant — remain gated, and both go through the same
+> `losesWork()` predicate so they cannot disagree.
+
 ## Phase 1: Correction logic and tests
 
 ### Overview
@@ -201,6 +223,15 @@ failure cases become assertable.
 
 The two clamp functions returning `null` rather than a coerced value is what implements
 snap-back: the caller restores what was there instead of inventing a number the GM never typed.
+
+**Addendum (2026-09-12, impl review):** the shipped module also exports
+`parseDraft(text: string): number`, which returns `NaN` for a blank or whitespace-only field.
+It is not scope creep but a repair to the contract above: `clampQuantity` is specified to take
+a `number` *and* to reject "empty", which a `number` parameter cannot express — `Number("")` is
+`0`, and `0` is a legal quantity meaning the shelf is cleared. Splitting the text-to-number step
+out was preferred to widening the clamp signature, so both clamps stay pure numeric predicates.
+**Every caller must compose the two** — `clampQuantity(parseDraft(draft))`, never
+`clampQuantity(Number(draft))`, or a cleared field commits silently as "sold out".
 
 #### 2. Rule tests
 
@@ -403,7 +434,33 @@ and then generating destroys corrections just as thoroughly, and the guardrail d
 distinguish.
 
 The recency bookkeeping from S-01 (`recentIds`) updates only on a draw that actually happens,
-so a cancelled Generate must not touch it.
+so a cancelled Generate must not touch it. *(Still true — verified 2026-09-12 against every
+`recentIds` write.)*
+
+**Addendum (2026-09-12, impl review) — three points where the shipped code has moved past the
+contract above. All three are deliberate and all three are improvements; recorded here because
+this plan is what the next reader treats as ground truth.**
+
+1. **`confirmOpen: boolean` became `PendingAction | null`** — a three-variant union
+   (`{ kind: "generate" } | { kind: "open", merchant } | { kind: "delete", merchant }`), grown by
+   S-04 (`32e1317`) and S-05 (`d42b7d0`) as each added its caller. Better than the planned
+   boolean: the pending action carries its `Merchant` as data, so a confirm cannot act on the
+   wrong record, and one `<dialog>` for three actions makes two simultaneous modals impossible.
+   The "one component, three callers, no renames" bet in the contract below paid off exactly —
+   `ConfirmDialog.tsx` has not been edited once since `76a2b22`.
+
+2. **The trigger is no longer `hasCorrections`.** `corrections-autosave` (`e5575a0`) replaced it
+   with `wouldLoseCorrections(hasCorrections, openedSavedId)`, because once corrections autosave
+   into an open record the old predicate warned about losses that could not happen — and a
+   warning that cries wolf gets dismissed on the one occasion that matters. Reasoning:
+   `context/changes/corrections-autosave/change.md:59-66`. This review then found that
+   `openedSavedId` means "was opened", not "is durably saved", and a failed autosave silently
+   suppressed the dialog; the predicate now also accounts for that and lives in one place,
+   `wouldLoseWork()`, shared by the gate and the cross-tab notice.
+
+3. **`ConfirmDialog` takes eight props, not seven** — `cancelLabel` as well, present since
+   `76a2b22`. Baking in "Anuluj" would have contradicted the contract's own "copy is supplied by
+   the caller, not baked in".
 
 ### Success Criteria:
 
@@ -487,6 +544,11 @@ and corrected survives a save. The practical consequence for this slice is that 
 corrected-cell marker keeps working after a reload once S-03 lands — the marker is not a
 session-only affordance. `CorrectionMap` keyed by `itemId` is the shape F-01 mirrors.
 
+**Amended 2026-09-12:** the marker was removed in `e5575a0` (see Desired End State). The
+storage decision it justified is unaffected and still correct — F-01 persists generated rows
+*plus* the overlay, so the generated-versus-corrected distinction survives a save. That
+distinction is now load-bearing for the FR-006 guard rather than for a visible marker.
+
 `AssortmentRow` and `format-price.ts` are unchanged by this slice. The only added surface is
 `corrections.ts`.
 
@@ -538,11 +600,11 @@ session-only affordance. `CorrectionMap` keyed by `itemId` is the shape F-01 mir
 - [ ] 2.7 Quantity corrected including 0, and 0 looks deliberate
 - [ ] 2.8 Cleared or nonsense input restores the previous value on blur
 - [ ] 2.9 Enter commits, Escape abandons the edit
-- [ ] 2.10 Corrected cells visibly marked without dominating the column
+- [ ] 2.10 Corrected cells visibly marked without dominating the column — VOID: marker removed in `e5575a0` (2026-09-12), nothing left to verify
 - [ ] 2.11 Numeric keypad appears on a mobile device
-- [ ] 2.12 Editing back to the original removes the marker
+- [ ] 2.12 Editing back to the original removes the marker — VOID: marker removed in `e5575a0`; the underlying rule survives and is unit-tested in `corrections.test.ts`
 - [ ] 2.13 Edit columns usable at 360 px with no horizontal scroll
-- [ ] 2.14 Each edit field announces its row and column; marker not colour-only
+- [ ] 2.14 Each edit field announces its row and column; marker not colour-only — second clause VOID (`e5575a0`); first clause verifiable, and the price field now names its unit
 
 ### Phase 3: Confirmation before regenerate
 

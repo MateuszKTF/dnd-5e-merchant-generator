@@ -1,5 +1,5 @@
 ---
-import MerchantGenerator from "@/components/MerchantGenerator";
+import GeneratorIsland from "@/components/GeneratorIsland";
 import Layout from "@/layouts/Layout.astro";
 
 // Every page is prerendered (AGENTS.md hard rule): `output: "server"` stays for
@@ -10,6 +10,7 @@ export const prerender = true;
 
 <Layout>
   <!-- client:load, not client:visible: the generator IS the page, so the first
-       interaction must not wait on an intersection observer. -->
-  <MerchantGenerator client:load />
+       interaction must not wait on an intersection observer. The island is the
+       generator wrapped in an error boundary — see GeneratorIsland.tsx. -->
+  <GeneratorIsland client:load />
 </Layout>

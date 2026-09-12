@@ -406,10 +406,13 @@ persistence, no effects on mount, no auto-generate.
 no state, no generation.
 
 **Contract**: `{ rows: readonly AssortmentRow[] }`. A real `<table>` with `<thead>` and
-column headers Nazwa / Ilość / Cena (FR-007). Price cells go through `formatPrice`. Numeric
-columns right-aligned and sized to content; the name column absorbs remaining width. Include
+column headers Nazwa / Ilość / Cena (FR-007). Price cells go through `formatPrice`. Include
 the row count near the table so the 10–25 guarantee is visible. Rarity is available on the
 row but is **not** a column — the PRD specifies exactly three.
+
+Column alignment and width policy moved to Phase 3 — it is the same edit as the
+narrow-screen treatment and splitting it would have styled the table twice. Phase 2 ships
+the markup unstyled.
 
 #### 3. Route wiring
 
@@ -585,6 +588,24 @@ in a persisted merchant entity, S-02 will make `quantity` and `priceGp` editable
 reshaping those fields later is the expensive change, so the field names are chosen to survive
 both.
 
+## Addenda (recorded during implementation review, 2026-09-12)
+
+Phase 1 shipped three things this plan did not describe. All benign, all kept:
+
+- **`GenerateOptions.pools`** — a third option beyond the specified `recentIds` and
+  `rng`. The plan required synthetic-pool tests for the spill path, which needs some
+  injection point; this is it. Marked `@internal` — production callers pass nothing.
+- **A pre-flight throw** in `generateAssortment` (`pool.length < size`), alongside the
+  specified spill-exhaustion throw. Same `AssortmentPoolError` type. Tests now assert
+  on the message so the two cases cannot be confused.
+- **Binary rules in `.gitattributes`** (`*.png`, `*.woff2`, …) beyond the specified
+  `* text=auto eol=lf`.
+
+Not followed: `.gitattributes` was to land as its own commit, first in the phase. It
+landed inside `020c671` with the rule. The stated risk did not materialise — the blobs
+were already LF in the object store, so `git add --renormalize .` was a no-op and the
+commit is 13 files rather than the predicted repo-wide churn.
+
 ## References
 
 - Roadmap item: `context/foundation/roadmap.md:152-175` (S-01), backlog row at line 259
@@ -614,6 +635,10 @@ both.
 
 - [x] 1.5 `WEALTH_CONFIG` makes the three wealth levels' behaviour obvious on its own — 020c671
 - [x] 1.6 Scratch run of all 12 (category, wealth) pairs produces plausible assortments — 020c671
+      — met with exception: proportions are correct, absolute values are not. `nędzna`
+      surfaces 84 720 gp of `przedmioty-magiczne` and 34 897 gp at the alchemist. Consciously
+      accepted for v1; see `context/foundation/lessons.md` L-01 for the cause and the three
+      candidate fixes. Open risk to the PRD's primary success criterion.
 
 ### Phase 2: Visible generator
 

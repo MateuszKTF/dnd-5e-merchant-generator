@@ -13,7 +13,7 @@
 
 import { CATEGORIES, WEALTH_LEVELS, type CategoryId, type Wealth } from "@/data/items";
 
-import type { Merchant } from "./merchant";
+import { isMerchant, type Merchant } from "./merchant";
 import type { StorageDocument } from "./merchant-storage";
 
 /**
@@ -75,16 +75,22 @@ export interface RestoredSession {
  * its argument, so the mount effect can run it twice under dev StrictMode
  * without a guarding ref.
  *
- * The `rows` check is not redundant with F-01's validation: `readDocument`
- * validates the *document* (`schemaVersion`, `saved`, the presence of a
- * `transient` object) and deliberately does not walk into the merchant. A
- * hand-edited `"transient": {}` therefore reads back as `ok`, and mapping over
- * an absent `rows` would throw inside a mount effect — blanking the only page
- * the product has. Treating it as nothing to restore shows the ordinary empty
- * state instead.
+ * **The `isMerchant` check is deliberate redundancy, not a missing guard
+ * elsewhere.** F-01 does validate merchants now — `readDocument` runs `salvage`,
+ * which drops unreadable records and nulls a damaged `transient` — so in
+ * practice nothing malformed reaches here through that path. (It did not always:
+ * this guard was written when `readDocument` validated only the document shape,
+ * and a hand-edited `"transient": {}` really did read back as `ok`.) It stays
+ * because this function is exported and has a second call site, and because
+ * mapping over an absent or junk `rows` would throw inside a mount effect,
+ * blanking the only page the product has. Treating it as nothing to restore
+ * shows the ordinary empty state instead.
+ *
+ * It uses F-01's own `isMerchant` rather than a hand-rolled `Array.isArray`,
+ * which accepted `rows: [null, 3]` and then threw on the very next line.
  */
 export function restoreFromMerchant(merchant: Merchant | null): RestoredSession | null {
-  if (merchant === null || !Array.isArray(merchant.rows)) {
+  if (merchant === null || !isMerchant(merchant)) {
     return null;
   }
 
@@ -179,17 +185,23 @@ const D = "stood-down";
  *
  * Two cells carry the weight and are meant to be checkable by eye:
  *
- * - `armed` x `promote-failed` is **`A`, never `S`** — a promote that failed
- *   leaves the button armed so the GM can try again. No cell in the
- *   `promote-failed` column reaches `S` from a state that was not already
- *   `saved`, so a failed save can never present as a save that happened.
+ * - the `promote-failed` column is **`A` or `D`, never `S`** — a promote that
+ *   failed leaves the button armed so the GM can try again, *including from
+ *   `saved`*. That last cell used to answer `S`, on the reading that an earlier
+ *   successful save had still happened; but the button does not say "saved
+ *   once", it says "saved", and a write that just failed makes that false. No
+ *   cell in this column reaches `S` from any state, so a failed save can never
+ *   present as a save that happened — without qualification.
  * - the `stood-down` row is `D` throughout — nothing leaves it, which is the
  *   absorbing property the `future-version` latch depends on.
- * - the `cleared-open` column is the **identity**: every row answers with
- *   itself. Losing the opened record does not change what the button may
- *   claim — a merchant the GM drew before opening is still on screen and still
- *   unsaved. The event exists to move {@link SaveSession.openedSavedId}, and
- *   keeping it inert here is what stops the two concerns entangling.
+ * - the `cleared-open` column is the identity **except from `saved`**, which
+ *   re-arms. For every other row, losing the opened record changes nothing the
+ *   button may claim — a merchant the GM drew before opening is still on screen
+ *   and still unsaved. From `saved` it changes everything: `saved` means "the
+ *   record I wrote to is in the library", so once that record is gone the
+ *   button would otherwise keep reading "Zapisano" over a merchant nothing
+ *   holds, *and* stay disabled, leaving no way to save it again short of a
+ *   reload. Re-arming is the honest answer — what is on screen is unsaved.
  * - `opened` arms exactly like `restored`: a merchant is on screen and the
  *   button has something to write. It does **not** land on `saved` — no press
  *   has happened, and `saved` is this module's word for "the last press
@@ -205,12 +217,33 @@ const SAVE_TRANSITIONS: Record<SaveState, Record<SaveEvent, SaveState>> = {
   unavailable:  { generated: A, corrected: A, restored: A, opened: A, promoted: U, "promote-failed": U, "cleared-open": U, "persistence-off": D },
   "stood-down": { generated: D, corrected: D, restored: D, opened: D, promoted: D, "promote-failed": D, "cleared-open": D, "persistence-off": D },
   armed:        { generated: A, corrected: A, restored: A, opened: A, promoted: S, "promote-failed": A, "cleared-open": A, "persistence-off": D },
-  saved:        { generated: A, corrected: A, restored: A, opened: A, promoted: S, "promote-failed": S, "cleared-open": S, "persistence-off": D },
+  saved:        { generated: A, corrected: A, restored: A, opened: A, promoted: S, "promote-failed": A, "cleared-open": A, "persistence-off": D },
 };
 
-/** Apply one event to the save button's state. Total — every cell is filled. */
+/**
+ * Apply one event to the save button's state.
+ *
+ * Total over the declared types — every cell is filled, and a missing one is a
+ * compile error. The `??` is for the domain *below* the types: a value that is
+ * not a `SaveState` or `SaveEvent` at runtime would otherwise return
+ * `undefined` typed as `SaveState`, and the **next** call would then index into
+ * it and throw a `TypeError` inside a `setSession` updater — a render-phase
+ * crash blanking the only page the product has, which is precisely what
+ * {@link restoreFromMerchant}'s guard exists to prevent one function up.
+ *
+ * It falls back to `unavailable` rather than to the current state, because the
+ * failure direction matters: a state nobody recognises must not offer a press.
+ *
+ * The widened view is the honest type, the same move `merchant-storage.ts`
+ * makes for `globalThis.localStorage`: read through the declared types the
+ * lookup cannot miss, so a plain `?.` reads as dead code and lint says so. The
+ * cast says out loud that the defence is against a caller who broke the
+ * contract, not against a hole in it.
+ */
 export function nextSaveState(current: SaveState, event: SaveEvent): SaveState {
-  return SAVE_TRANSITIONS[current][event];
+  const table: Record<string, Record<string, SaveState> | undefined> = SAVE_TRANSITIONS;
+
+  return table[current]?.[event] ?? "unavailable";
 }
 
 /**
@@ -283,6 +316,22 @@ export function nextSaveSession(current: SaveSession, next: SaveSessionEvent): S
 }
 
 /**
+ * Is the GM about to lose work that nothing can give back?
+ *
+ * The guard used to ask `hasCorrections` alone — "does this merchant carry hand
+ * edits" — and fired over a record whose edits were already safely in the
+ * library. An ostrzeżenie that cries wolf trains the GM to dismiss it, and then
+ * it fails on the one occasion that mattered.
+ *
+ * The real question has two halves: there are corrections, **and** they live
+ * nowhere but this screen. An open record auto-saves every correction, so
+ * replacing what is on screen costs nothing.
+ */
+export function wouldLoseCorrections(hasCorrections: boolean, openedSavedId: string | null): boolean {
+  return hasCorrections && openedSavedId === null;
+}
+
+/**
  * Which saved record — if any — this document's transient slot came from.
  *
  * `openedSavedId` cannot be persisted: the storage format is forward-only
@@ -299,22 +348,6 @@ export function nextSaveSession(current: SaveSession, next: SaveSessionEvent): S
  * Returning `null` is the ordinary case: a freshly drawn merchant has an id
  * nothing else shares.
  */
-/**
- * Is the GM about to lose work that nothing can give back?
- *
- * The guard used to ask `hasCorrections` alone — "does this merchant carry hand
- * edits" — and fired over a record whose edits were already safely in the
- * library. An ostrzeżenie that cries wolf trains the GM to dismiss it, and then
- * it fails on the one occasion that mattered.
- *
- * The real question has two halves: there are corrections, **and** they live
- * nowhere but this screen. An open record auto-saves every correction, so
- * replacing what is on screen costs nothing.
- */
-export function wouldLoseCorrections(hasCorrections: boolean, openedSavedId: string | null): boolean {
-  return hasCorrections && openedSavedId === null;
-}
-
 export function openedSavedIdFor(doc: StorageDocument): string | null {
   const transient = doc.transient;
   if (transient === null) {

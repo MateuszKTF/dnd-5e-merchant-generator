@@ -97,12 +97,23 @@ describe("hasCorrections — the confirmation dialog's trigger", () => {
     expect(hasCorrections(ROWS, { candle: { quantity: 4 } })).toBe(false);
   });
 
-  it("is false when a 0.5 gp price round-trips through the sp field it is displayed in", () => {
-    // What the GM actually does: the cell shows "5 sp", they retype 5, and the
-    // island converts back with partsToGp. Float equality would call this dirty.
-    const { value, unit } = priceParts(ROWS[1].priceGp);
+  it("is false when a price round-trips through the sp field it is displayed in", () => {
+    // What the GM actually does: the cell shows "9 sp", they retype 9, and the
+    // island converts back with partsToGp.
+    //
+    // The base price is chosen so the round trip is *not* bit-exact: a 0.75 gp
+    // rope in a `nędzna` settlement is stored as 0.75 * 1.2 === 0.8999999999999999
+    // and comes back from the field as exactly 0.9. ROWS[1]'s flat 0.5 gp would
+    // not do — partsToGp(5, "sp") is 5 / 10, which is 0.5 on the nose, so raw
+    // float equality passes it too and the test would guard nothing.
+    const generated = 0.75 * 1.2;
+    const modified = [row("rope", 2, generated)];
+    const { value, unit } = priceParts(generated);
+    const retyped = partsToGp(value, unit);
+
     expect(unit).toBe("sp");
-    expect(hasCorrections(ROWS, { rope: { priceGp: partsToGp(value, unit) } })).toBe(false);
+    expect(retyped).not.toBe(generated);
+    expect(hasCorrections(modified, { rope: { priceGp: retyped } })).toBe(false);
   });
 
   it("is false when a wealth-modified price round-trips through the field it is displayed in", () => {
@@ -129,6 +140,19 @@ describe("hasCorrections — the confirmation dialog's trigger", () => {
   it("ignores a difference below 1 cp but not a difference of 1 cp", () => {
     expect(hasCorrections(ROWS, { rope: { priceGp: 0.502 } })).toBe(false);
     expect(hasCorrections(ROWS, { rope: { priceGp: 0.51 } })).toBe(true);
+  });
+
+  it("reads an unusable overlay field as absent, the same way mergeCorrections does", () => {
+    // A JSON.parse'd storage document can carry null where a number belongs —
+    // nothing on that path validates correction values. mergeCorrections drops
+    // it via `??` and renders the generated value; if the dirty check disagreed,
+    // the FR-006 dialog would fire over a shop with no visible correction and no
+    // edit could clear it. The cast is the point: this is the runtime shape the
+    // type system promises cannot happen.
+    const broken = { rope: { quantity: null, priceGp: null } } as unknown as CorrectionMap;
+
+    expect(mergeCorrections(ROWS, broken)[1]).toEqual(ROWS[1]);
+    expect(hasCorrections(ROWS, broken)).toBe(false);
   });
 });
 
@@ -178,6 +202,33 @@ describe("parseDraft", () => {
     expect(parseDraft("0")).toBe(0);
   });
 
+  it("reads a price the way the table rendered it, comma and all", () => {
+    // formatPrice renders pl-PL: "4,2" and "1 500" (no-break space, codepoint
+    // varies by ICU build). A GM retyping what they read must not have the edit
+    // snapped back. Number("4,2") is NaN, so this has to be normalized first.
+    // The two lines below carry a real U+00A0 and U+202F, not plain spaces —
+    // those are the grouping characters Intl actually emits, and a test using
+    // a plain space would not prove `\s` reaches them. The round trip at the
+    // end pins it regardless of which one this runtime's ICU picked.
+    expect(parseDraft("4,2")).toBe(4.2);
+    expect(parseDraft("1 500")).toBe(1500);
+    expect(parseDraft("1 500,5")).toBe(1500.5);
+  });
+
+  it("round-trips whatever this runtime's ICU actually renders", () => {
+    const rendered = new Intl.NumberFormat("pl-PL", { maximumFractionDigits: 2 }).format(1500.5);
+
+    // Guard the fixture: if ICU ever rendered a plain "1500.5" this would pass
+    // without exercising the normalization at all.
+    expect(rendered).not.toBe("1500.5");
+    expect(parseDraft(rendered)).toBe(1500.5);
+  });
+
+  it("still rejects a number with two decimal separators", () => {
+    expect(Number.isNaN(parseDraft("1,2,3"))).toBe(true);
+    expect(Number.isNaN(parseDraft("1.2.3"))).toBe(true);
+  });
+
   it("reads nonsense as unusable", () => {
     expect(Number.isNaN(parseDraft("abc"))).toBe(true);
   });
@@ -217,6 +268,22 @@ describe("clampPriceGp", () => {
     expect(clampPriceGp(1000000)).toBeNull();
     expect(clampPriceGp(Number.NaN)).toBeNull();
     expect(clampPriceGp(parseDraft(""))).toBeNull();
+  });
+
+  it("quantizes to whole copper, so the number stored is the number shown", () => {
+    // The field takes free decimals (step="any"). 5,05 sp is 0.505 gp, which the
+    // cell would immediately redisplay as "5,1" — storing one number and showing
+    // another. Sub-copper edits are the worse case: they compare clean and get
+    // discarded on the next regenerate without a confirmation.
+    expect(clampPriceGp(partsToGp(5.05, "sp"))).toBe(0.51);
+    expect(clampPriceGp(0.5004)).toBe(0.5);
+    expect(clampPriceGp(3 * 1.2)).toBe(3.6);
+  });
+
+  it("range-checks before rounding, so nothing is rounded into range", () => {
+    // 0.004 gp would become the legal 0.01 floor if the order were reversed.
+    expect(clampPriceGp(0.004)).toBeNull();
+    expect(clampPriceGp(999999.4)).toBeNull();
   });
 
   it("accepts the smallest price the cp field can produce", () => {

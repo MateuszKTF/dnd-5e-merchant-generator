@@ -14,7 +14,7 @@
 
 import { CATEGORIES } from "@/data/items";
 
-import type { Merchant } from "./merchant";
+import { formatWallClock, type Merchant } from "./merchant";
 
 /**
  * The longest name the list will keep.
@@ -258,30 +258,18 @@ export function filterMerchants(merchants: readonly Merchant[], query: string): 
   return sorted.filter((merchant) => matchesQuery(merchant, normalized, categoryLabelFor(merchant)));
 }
 
-function pad2(value: number): string {
-  return String(value).padStart(2, "0");
-}
-
 /**
  * `2026-09-11T18:15:00.000Z` → `11.09.2026, 20:15`, in local time.
  *
- * The same shape `autoName` builds, so a renamed merchant and an untouched one
- * present their time identically. Built from local date parts rather than
- * `Intl` for the same reason: the string is the GM's wall clock and is
- * byte-stable across runtimes.
+ * Delegates to `formatWallClock` in `merchant.ts` rather than rebuilding the
+ * format, because a renamed merchant and an untouched one sit in the same list:
+ * `autoName` bakes this shape into the name itself, and this label renders
+ * beside it. One owner, so the two cannot drift under the GM's eyes.
  */
 function formatSavedAt(iso: string | null): string | null {
   if (iso === null) {
     return null;
   }
 
-  const when = new Date(iso);
-  if (Number.isNaN(when.getTime())) {
-    return null;
-  }
-
-  const date = `${pad2(when.getDate())}.${pad2(when.getMonth() + 1)}.${when.getFullYear()}`;
-  const time = `${pad2(when.getHours())}:${pad2(when.getMinutes())}`;
-
-  return `${date}, ${time}`;
+  return formatWallClock(new Date(iso));
 }

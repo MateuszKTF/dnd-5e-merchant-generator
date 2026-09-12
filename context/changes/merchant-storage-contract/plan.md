@@ -297,6 +297,15 @@ operation over it. The file name follows `AGENTS.md:42`, which uses it as its ow
   `saved` with a **fresh id**, a `savedAt` timestamp, and a deep-independent copy of `rows` and
   `corrections`. The transient slot is left in place. This is the structural fix for the
   aliasing hazard: a subsequent `putTransient` physically cannot reach the saved record.
+
+  **Corrected 2026-09-12 (impl review) — which part does the work.** The *fresh id* plus the
+  `JSON.stringify` / `JSON.parse` boundary is what makes the saved record unreachable: every
+  document round-trips through JSON on write and read, so object-level aliasing cannot survive a
+  write at all, and a shared **id** is the only form the hazard could actually take.
+  `structuredClone` protects something narrower — the record `promoteTransient` *returns* to its
+  caller, which the island puts straight into React state. Today `transient` is itself a fresh
+  parse, so the clone is defence-in-depth rather than load-bearing. It stays, and is now pinned
+  by its own test, but the plan's original wording credited it with the whole guarantee.
 - `renameMerchant(id, name, storage?)` — FR-010's rename, for S-04.
 - `updateSavedMerchant(id, patch, storage?)` — replaces a saved record's `rows`, `corrections`
   and `savedAt`, for S-04's save-in-place. It must **not** touch `id`, `createdAt` or `name` —
@@ -455,6 +464,37 @@ byte-for-byte unchanged**, and every subsequent write is refused. Pre-seeded wit
 found number, **the stored bytes are unchanged**, and every subsequent write returns `read-only`
 while still leaving the bytes unchanged. A document that parses but is structurally invalid is
 treated as corrupt, not as empty.
+
+**Addendum (2026-09-12, impl review) — four places where the shipped code has moved past this
+contract. All four were deliberate, all four came out of triage, and each is recorded here
+because this plan is what the next reader treats as ground truth.**
+
+1. **The `< SCHEMA_VERSION` seam fails closed.** The contract above says "no runner, no
+   registry", and the branch shipped as a fall-through comment. It now latches read-only and
+   returns a `needs-migration` status. Reason: `save` stamps `SCHEMA_VERSION` onto everything it
+   writes, so a fall-through would relabel a v1 document as v2 without migrating it — silently
+   and permanently, on the one day the branch has a live case. The plan's own Migration Notes
+   ("the migration must be written before it") argue for exactly this. It is still not a runner
+   or a registry, so the "What We're NOT Doing" line stands.
+
+2. **A write-refusing store reads `read-only`, not `unavailable`** — and carries the document.
+   `probeWritable`'s own reasoning says a *full* store must stay readable because "refusing to
+   read it would lose merchants that are sitting right there"; the same argument applies to a
+   store that merely refuses writes, and returning `unavailable` hid a GM's whole library behind
+   a banner while the bytes sat one `getItem` away. `readDocument` also reports the read-only
+   *latch* this way, so a page latched in one tab cannot tell the next reader the coast is clear.
+
+3. **Element-level damage no longer costs the document.** `isStorageDocument` validates only the
+   document's own shape; a `salvage()` step then keeps every merchant this build can read and
+   drops the rest, reporting a `dropped` count on `ok`. An earlier triage had wired per-element
+   validation to the document-level response, so one truncated record quarantined the whole
+   library and left the main key empty. Validating elements is right; destroying the document
+   over one of them is not.
+
+4. **The read union is now exhaustiveness-guarded at its consumer.** `MerchantGenerator`'s mount
+   `switch` closes with `const unhandled: never = read`, because the callback returns `void` and
+   a missing case was therefore legal — which is how `needs-migration` came to be ignored
+   silently. Criterion 3.9 is now enforced by the compiler rather than by review.
 
 ### Success Criteria:
 

@@ -10,7 +10,8 @@ A D&D 5e merchant generator for tabletop game masters: Astro 6 in SSR mode (`out
 - **Never `wrangler pages deploy`.** `@astrojs/cloudflare` v13 dropped Cloudflare Pages support; this project deploys to Cloudflare **Workers** with `npx wrangler deploy`. Deploy details and the operational runbook live in @context/deployment/deploy-plan.md.
 - **Always `npx wrangler`, never `npm i -g wrangler`.** A global binary shadows the pinned `^4.90.0` and can drift outside the adapter's `^4.83.0` peer range.
 - **Promotion to production is human-only** — `wrangler deploy` and `wrangler versions deploy`. Agents may run `astro build`, `wrangler versions upload`, `deployments list`, `tail`, and `rollback` unattended. Guards are in @.claude/settings.json.
-- **`npm run lint` fails on this Windows checkout with ~1000 `Delete ␍` errors and zero real errors.** Git stores LF, `core.autocrlf=true` checks out CRLF, and there is no `.gitattributes`. CI on ubuntu checks out LF and passes. Judge lint by non-CRLF errors only, or add `.gitattributes` with `* text=auto eol=lf`.
+- **`npm run lint` is a real gate — treat a non-zero exit as a failure.** It used to report ~1000 `Delete ␍` errors on Windows checkouts; `.gitattributes` (`* text=auto eol=lf`, added 2026-09-11 in `020c671`) fixed that. If CRLF errors ever return, the working tree drifted from the attribute — `npm run lint:fix` rewrites it, because `git add --renormalize` only updates the index.
+- **Throw for a broken invariant, return a discriminated union for an expected failure.** `src/lib/assortment.ts` throws `AssortmentPoolError` when the catalog cannot satisfy a draw — a bug or a bad regeneration, and the island catches it by class to pick its message. `src/lib/merchant-storage.ts` never throws: a full quota or unreadable document is an ordinary outcome, so every read and write answers with a union. Pick by which kind of failure it is, not by preference.
 - **`context/` is the source of truth** for the PRD, stack hand-off, and plans — never overwrite it, and never write to `context/archive/` (see @CLAUDE.md).
 - **Browser-storage schema changes are forward-only.** A Worker rollback reverts the script and static assets, but not a GM's `localStorage`. Any device that already loaded a new saved-merchant format keeps it, and the reverted code must still read it. The PRD guardrail is "zapisany kupiec nigdy nie znika po cichu" — write a migration path before shipping a schema change.
 - **Generate assortments client-side, in the React island.** The free Workers tier caps CPU at **10 ms per invocation**; server-side rarity sampling over 30–40-item pools aims that ceiling straight at the PRD's "under 5 seconds" criterion. The data is browser-local anyway, so the server buys nothing. Decided 2026-09-11 — this is settled, not open.
@@ -35,11 +36,17 @@ There is no `src/pages/api/`. v1 needs no endpoint: generation runs in the brows
 - `npm run lint` / `npm run lint:fix` — ESLint with type-checked rules
 - `npm run format` — Prettier
 
-No test framework is configured, so there is no `npm test`. Node version is pinned in @.nvmrc.
+- `npm test` — Vitest, single run (`npm run test:watch` to watch). Node environment, no jsdom; `vitest.config.ts` collects `src/**/*.test.ts` only, so nothing React or Astro is ever picked up. CI runs it between `astro sync` and `build`.
+
+Node version is pinned in @.nvmrc.
 
 ## Style & naming
 
 Import through the `@/*` alias instead of deep relative paths. Components are PascalCase (`MerchantTable.tsx`), `src/lib/` files kebab-case (`merchant-storage.ts`), shadcn primitives lowercase inside `ui/` (`button.tsx`). Prefix intentionally unused bindings with `_`. `no-console` warns and `astro/no-set-html-directive` errors — see @eslint.config.js and @.prettierrc.json.
+
+**Colours: literal `neutral-*`, not the shadcn tokens.** @src/styles/global.css ships the starter's full token set including a `.dark` block, but v1 has no dark mode and `Layout.astro` paints `bg-white text-neutral-900` on `<body>`, which overrides the token base rule. Every component follows suit with literal `neutral-*` (plus `red-*` / `amber-*` as semantic accents) — there is no `gray-`, `slate-` or `zinc-` anywhere. Stay on that palette; do not mix in `bg-background` / `text-muted-foreground` / `border-border`, and do not reach for a second grey family. Two contrast floors to respect, both WCAG AA: control borders need 3:1 against white (`neutral-500`, not `neutral-300`), and any rule that carries meaning — the table's row separators — needs to be visible at `neutral-300` or darker.
+
+**Tap targets are 44px.** `h-11` on selects, buttons and anything else a thumb has to hit; the PRD's only NFR is phone readability. `Button` composes through `cn()`, so passing `className="h-11"` correctly beats the `h-9` cva default.
 
 ## Security & configuration
 

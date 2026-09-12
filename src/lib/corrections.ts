@@ -14,7 +14,7 @@
  */
 
 import type { AssortmentRow } from "./assortment";
-import type { PriceUnit } from "./format-price";
+import { CP_PER_GP, type PriceUnit } from "./format-price";
 
 /**
  * One row's overrides. An absent field means that cell was never corrected —
@@ -33,15 +33,21 @@ export interface Correction {
  * (FR-004). If that guarantee ever weakens, corrections start leaking between
  * rows with no visible symptom.
  *
+ * Lookups are bare index access on a plain object, so an `itemId` colliding
+ * with an `Object.prototype` member — `toString`, `constructor`, `__proto__` —
+ * would resolve to the inherited function instead of reading as absent. Traced
+ * and harmless: {@link mergeCorrections} would rebuild a row with identical
+ * values, and {@link isCorrected} reads neither field off a function, so dirty
+ * detection stays right. Unreachable anyway — every catalog `itemId` is a kebab
+ * slug generated from the SRD. Switch both lookups to `Object.hasOwn` if ids
+ * ever start coming from somewhere a GM can name.
+ *
  * The value is `| undefined` on purpose. Most rows have no entry, and
  * `noUncheckedIndexedAccess` is off in this project — without it TypeScript
  * would type every lookup as a present `Correction` and flag the runtime
  * absence guards below as dead code.
  */
 export type CorrectionMap = Readonly<Record<string, Correction | undefined>>;
-
-/** 1 gp = 100 cp — the grid prices are compared on. */
-const CP_PER_GP = 100;
 
 /**
  * The legal span for a corrected price.
@@ -98,6 +104,9 @@ export function mergeCorrections(rows: readonly AssortmentRow[], corrections: Co
  * whole rule: committing an edit that restores the generated value leaves the
  * overlay key in place, and this comparison is what makes the cell clean
  * again. Callers therefore never need to prune keys.
+ *
+ * "Exists" means a usable number, not merely `!== undefined` — see
+ * {@link isOverride}.
  */
 export function isCorrected(
   row: AssortmentRow,
@@ -105,10 +114,34 @@ export function isCorrected(
 ): { quantity: boolean; price: boolean } {
   if (!correction) return { quantity: false, price: false };
 
+  const { quantity, priceGp } = correction;
+
   return {
-    quantity: correction.quantity !== undefined && correction.quantity !== row.quantity,
-    price: correction.priceGp !== undefined && toCopper(correction.priceGp) !== toCopper(row.priceGp),
+    quantity: isOverride(quantity) && quantity !== row.quantity,
+    price: isOverride(priceGp) && toCopper(priceGp) !== toCopper(row.priceGp),
   };
+}
+
+/**
+ * Is this overlay field a number we can compare, rather than an absent one?
+ *
+ * `mergeCorrections` reads an absent field with `??`, which also swallows
+ * `null`. This test has to swallow the same values or the two disagree: a
+ * `{ quantity: null }` entry would render as the generated value while
+ * {@link isCorrected} called the cell corrected — firing the FR-006 dialog over
+ * a shop with no visible correction, permanently, because no edit the GM can
+ * make would clear it.
+ *
+ * That shape is reachable. An overlay arrives here from a `JSON.parse`d storage
+ * document, and `isStorageDocument` in `merchant-storage.ts` validates the
+ * document's own shape without ever inspecting correction values — so under the
+ * forward-only storage rule in `AGENTS.md`, a hand-edited or future-format
+ * document can deliver one. Anything unusable reads as *not corrected*: the
+ * failure mode of a false clean is a missing warning about a correction that
+ * was already unreadable, which beats a dialog the GM cannot dismiss.
+ */
+function isOverride(value: number | undefined): value is number {
+  return typeof value === "number" && Number.isFinite(value);
 }
 
 /**
@@ -160,8 +193,18 @@ export function priceInUnit(gp: number, unit: PriceUnit): number {
  * clamps below honest about the empty case.
  */
 export function parseDraft(text: string): number {
-  const trimmed = text.trim();
-  return trimmed === "" ? Number.NaN : Number(trimmed);
+  // The GM is retyping a number the table just showed them, and `format-price`
+  // renders it pl-PL: a comma for the decimal, a no-break space between
+  // thousands whose exact codepoint varies by ICU build. `Number` rejects both,
+  // which would snap back an edit the GM plainly typed. So strip the grouping
+  // and accept the comma before parsing.
+  //
+  // `\s` covers U+00A0 and U+202F, which is why this does not name a codepoint
+  // — `formatNumber` warns that the grouping character is not stable.
+  // Only the first comma is converted, so "1,2,3" still reads as unusable.
+  const normalized = text.replace(/\s/g, "").replace(",", ".");
+
+  return normalized === "" ? Number.NaN : Number(normalized);
 }
 
 /**
@@ -171,6 +214,12 @@ export function parseDraft(text: string): number {
  * Everything unusable (blank, non-numeric, negative, fractional, over 99)
  * returns `null` so the caller restores the previous value instead of
  * inventing a number the GM never typed.
+ *
+ * **Feed this from {@link parseDraft}, not from `Number()`.** The blank case is
+ * the reason: `Number("")` is `0`, and `0` is a legal quantity here, so
+ * `clampQuantity(Number(text))` turns a cleared field into a deliberate "sold
+ * out" with nothing to signal it. This function cannot catch that on its own —
+ * by the time it sees a `number`, the empty field is indistinguishable.
  */
 export function clampQuantity(n: number): number | null {
   // Rejects NaN and Infinity as well as fractions.
@@ -184,9 +233,17 @@ export function clampQuantity(n: number): number | null {
  *
  * Same snap-back contract as {@link clampQuantity}: out of range or
  * unparseable returns `null` rather than a coerced value.
+ *
+ * An in-range price is quantized to whole copper before it is returned, so the
+ * number stored is the number the GM sees. The field accepts free decimals
+ * (`step="any"`), and copper is the smallest coin — without this, typing `5,05`
+ * into an `sp` cell would store `0.505 gp` while the cell immediately redisplays
+ * `5,1`, and a sub-copper edit would read as clean to {@link isCorrected} and be
+ * discarded on the next regenerate with no confirmation. Range is checked on the
+ * raw value first, so rounding can never lift an out-of-range price into range.
  */
 export function clampPriceGp(gp: number): number | null {
   if (!Number.isFinite(gp)) return null;
   if (gp < MIN_PRICE_GP || gp > MAX_PRICE_GP) return null;
-  return gp;
+  return Math.round(gp * CP_PER_GP) / CP_PER_GP;
 }

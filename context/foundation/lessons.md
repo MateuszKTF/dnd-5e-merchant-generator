@@ -79,3 +79,33 @@ Dwie tanie metody:
 
 Tu obie metody zastosowano: sonda pokazała `threw=20 returned=0`, a po rozbiciu na dwa
 testy mutacja (usunięcie strażnika `eligible`) prawidłowo wywaliła zestaw.
+
+---
+
+## L-04: Bramka, która wygląda na włączoną, a nie obejmuje niczego
+
+**Data:** 2026-09-12 · **Wyszło z:** impl review S-02 (`manual-item-corrections`), Faza 3
+
+**Obserwacja.** `eslint.config.js:83` rozwija
+`eslintPluginAstro.configs["flat/jsx-a11y-recommended"]`. Wygląda to na włączoną bramkę
+dostępności dla całego projektu — plan S-02 tak to właśnie zacytował: „`eslint.config.js:83`
+enables `flat/jsx-a11y-recommended`, so the project has already opted into caring about this".
+Reguły z tej paczki mają jednak przestrzeń nazw `astro/jsx-a11y/*` i obowiązują **wyłącznie w
+plikach `.astro`**. Cały interfejs tego produktu to wyspy React, więc nie jest objęty niczym.
+
+Sprawdzone, nie założone: sonda w `src/components/` z `<img src="x.png" />`, klikalnym `<a>`
+bez `href` i `<input>` bez etykiety przechodzi lint **czysto** — odzywa się tylko reguła
+TypeScriptowa.
+
+Koszt: cztery ustalenia z jednej rundy review (nazwa dostępna pól edycji, wskaźnik focusa,
+obramowanie przycisku Anuluj, brak `aria-describedby`) były dla CI niewidoczne i zawsze by były.
+
+**Reguła.** Zanim powołasz się na bramkę w planie albo w review, sprawdź jej **zasięg plikowy**,
+nie samą obecność wpisu w configu. Najtańszy dowód to sonda: plik z celowym naruszeniem,
+uruchomiony lint, sprawdzony kod wyjścia. Nazwa paczki („jsx-a11y") mówi co reguła robi, nie
+gdzie działa.
+
+**Applies to:** każda konfiguracja bramki w tym repo (`eslint.config.js`, `tsconfig`,
+`vitest.config.ts` — por. `[[L-03]]`, gdzie zawiódł zasięg testu, nie lintu), a w szczególności
+każdy plan powołujący się na istniejącą bramkę jako uzasadnienie, że czegoś nie trzeba sprawdzać
+ręcznie.

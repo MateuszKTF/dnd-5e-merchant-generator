@@ -202,6 +202,21 @@ save-armed rules are unit-testable despite the island being unreachable by the t
   The transition table is the whole point of this module: a promote that failed must not present
   as saved, and that is the one rule most likely to be written wrong inline.
 
+  **Addendum (2026-09-12, impl review) — the shipped machine has four states, not three.**
+  `5106527` itself added `stood-down` and made `persistence-off` reach it rather than
+  `unavailable`; the commit message argues for it, so the deviation was conscious, but this
+  contract text was never reconciled. The reason it needs a state of its own: `stood-down` is
+  **absorbing**, and `unavailable` is not. A later Generate must not re-arm a button whose press
+  cannot succeed, and with three states it would — `unavailable × generated → armed`. The
+  asymmetry above is unaffected and still holds: only `future-version` fires `persistence-off`.
+
+  Two further cells changed during the same review, both away from presenting a failure as a
+  success. `saved × promote-failed` now re-arms instead of staying `saved` — the button does not
+  say "saved once", and a write that just failed makes "saved" false however many succeeded
+  before it. `saved × cleared-open` now re-arms too: `saved` means "the record I wrote to is in
+  the library", so deleting that record makes the claim false, and leaving it as `saved` left the
+  button reading "Zapisano" *and disabled* over a merchant nothing held.
+
 #### 2. Module tests
 
 **File**: `src/lib/merchant-session.test.ts` (new)
@@ -303,6 +318,36 @@ truthful to render.
 **Contract**: Add `saveState: SaveState` to island state, driven exclusively by
 `nextSaveState` — dispatch `"restored"` after a successful restore, `"generated"` after a draw,
 `"corrected"` after a committed correction. No button exists yet in this phase.
+
+**Addendum (2026-09-12, impl review) — four places the shipped code has moved past this phase's
+contract. All four were deliberate; recorded here because this plan is what the next reader
+treats as ground truth, and because Phase 1's contract got exactly this treatment while its
+sibling did not.**
+
+1. **`saveState` became `SaveSession`.** S-04 replaced the bare `SaveState` with
+   `{ state, openedSavedId }` driven by `nextSaveSession`, which computes `state` by delegating to
+   `nextSaveState`. The contract's "driven exclusively by `nextSaveState`" therefore still holds,
+   one layer up — `setSaveState` does not exist and no call site assigns state directly.
+
+2. **`putTransient` has four call sites, not two.** The two named here (confirmed draw, committed
+   correction) plus two new *actions* that did not exist when this was written: opening a saved
+   merchant (S-04) and relinking the transient after a promote (`corrections-autosave`). The
+   invariant this clause protects — writes are imperative and attached to actions, never to an
+   effect watching state — is intact.
+
+3. **Criterion 2.11 was false as written and has been reworded.** "None on page load" was never
+   true: `readDocument` probes writability with a real `setItem`/`removeItem` pair, which the plan
+   never mentioned. "One per correction" stopped being true when correction autosave landed — a
+   correction to an *open* record writes twice, deliberately, transient first. A criterion that
+   always fails for reasons unrelated to any regression gets ignored, and then catches nothing.
+
+4. **The write-and-session block is the extraction candidate.** `persist`, `handleSave`,
+   `addMerchant`, `autosaveOpened`, `handleRename`, `deleteSavedMerchant`, `conditionFromFailure`
+   and the `storedSession`/`saved`/`storageStatus`/`autosaveFailed` quartet are ~300 lines with no
+   JSX, and five of this review's ten findings lived in them. They are untested only because they
+   sit in a `.tsx` the Vitest glob cannot see. Lifted to `src/lib/merchant-writes.ts` as a reducer
+   (state + event in, `{ state, writes[] }` out) they would fall inside the existing gate with no
+   jsdom. Recorded as follow-up work, not done here.
 
 ### Success Criteria:
 
@@ -569,7 +614,7 @@ survivable rather than destructive.
 - [ ] 2.8 Controls come back matching the restored merchant
 - [ ] 2.9 Generate on a restored merchant produces a visibly different list
 - [ ] 2.10 No hydration warning in the console on load
-- [ ] 2.11 One write per generate, one per correction, none on page load
+- [ ] 2.11 One write per generate, one per correction, none on page load — **reworded 2026-09-12, see the Phase 2 addendum**: one write to `STORAGE_KEY` per generate; one per correction, or two when a saved record is open; and none to `STORAGE_KEY` on page load, though the writability probe does write and remove its own key on every read
 - [ ] 2.12 First-ever visit shows the normal empty state, not an error
 
 ### Phase 3: Explicit save and storage notices

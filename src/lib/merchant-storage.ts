@@ -19,7 +19,7 @@
  */
 
 import type { Merchant, StoredCorrections, StoredRow } from "./merchant";
-import { newMerchantId } from "./merchant";
+import { isMerchant, newMerchantId } from "./merchant";
 
 /**
  * The single key the whole document lives under.
@@ -65,7 +65,10 @@ export interface StorageLike {
 /**
  * What a read found. Exhaustive: S-03 can `switch` on it without a fallback.
  *
- * - `ok` — a valid document this build understands.
+ * - `ok` — a valid document this build understands. `dropped` is present and
+ *   non-zero when individual merchants inside it could not be read and were
+ *   left out: the document is fine, some records in it were not. Element damage
+ *   never costs the whole library — see `salvage`.
  * - `empty` — nothing stored yet. Not an error; the first visit looks like this.
  * - `unavailable` — no store, or one that refuses reads or writes. The GM keeps
  *   working in memory behind a persistent banner; nothing here blocks generation.
@@ -73,12 +76,27 @@ export interface StorageLike {
  *   untouched, and writes are refused for the rest of the page load.
  * - `quarantined` — the payload was unreadable and has been copied aside; the
  *   main key now holds a fresh document. The GM's old data still exists.
- * - `unreadable` — the payload was unreadable and could *not* be copied aside,
- *   so nothing was touched. The corrupt bytes are still there, recoverable by
- *   hand.
+ * - `unreadable` — the payload could not be read and the main key could not be
+ *   replaced with a fresh document, so **the corrupt bytes are still under the
+ *   main key**, recoverable by hand. Says nothing about whether the side copy
+ *   landed: it is reached both when the copy failed (nothing was written at
+ *   all) and when the copy succeeded but the reset write did not (the bytes now
+ *   exist in two places). What the status promises is the part that matters —
+ *   the original was not destroyed. Writes are refused for the rest of the page
+ *   load either way.
+ * - `needs-migration` — the document is older than this build and no migration
+ *   has been written for it. Left untouched and writes refused, because `save`
+ *   stamps the current version onto whatever it writes: falling through would
+ *   relabel an un-migrated document as current. No live case at v1.
+ * - `read-only` — the document was read fine, but the store refuses writes
+ *   (Safari's private mode). **Carries the document**, because the GM's saved
+ *   merchants are right there and hiding them behind a banner would lose them
+ *   for no reason. Writes are refused for the rest of the page load.
  */
 export type ReadResult =
-  | { status: "ok"; doc: StorageDocument }
+  | { status: "ok"; doc: StorageDocument; dropped?: number }
+  | { status: "read-only"; doc: StorageDocument; dropped?: number }
+  | { status: "needs-migration"; found: number }
   | { status: "empty" }
   | { status: "unavailable" }
   | { status: "future-version"; found: number }
@@ -181,8 +199,33 @@ function resolveStorage(storage?: StorageLike): StorageLike | null {
  */
 const QUOTA_ERROR_NAMES = new Set(["QuotaExceededError", "QUOTA_EXCEEDED_ERR", "NS_ERROR_DOM_QUOTA_REACHED"]);
 
+/**
+ * Structurally, never by constructor.
+ *
+ * `error instanceof DOMException` looks stricter and is strictly worse here.
+ * It fails for a quota error that arrives as a plain `Error` (some engines and
+ * polyfills) and for a `DOMException` from another realm, where `instanceof`
+ * never matches. Both then fall through to `unavailable`, **which latches** —
+ * so a full store is reported as "site data is off" and `deleteMerchant`, the
+ * one remedy the product offers for a full store, is refused. Misclassifying
+ * full as disabled does not just pick the wrong message; it removes the way
+ * out. The correctly-classified path avoids this precisely because `"full"`
+ * does not latch.
+ *
+ * It also made the two legacy names below unreachable — reducing the set to
+ * `QuotaExceededError` alone changed no test — and `instanceof` on an absent
+ * global throws `ReferenceError`, out of a module whose first line promises it
+ * never throws. Reading `name` and `code` off an unknown value does none of
+ * that. `code` is deprecated but is the only signal some older engines give.
+ */
 function isQuotaError(error: unknown): boolean {
-  return error instanceof DOMException && QUOTA_ERROR_NAMES.has(error.name);
+  if (typeof error !== "object" || error === null) {
+    return false;
+  }
+
+  const { name, code } = error as { name?: unknown; code?: unknown };
+
+  return (typeof name === "string" && QUOTA_ERROR_NAMES.has(name)) || code === 22 || code === 1014;
 }
 
 /**
@@ -218,6 +261,36 @@ function emptyDocument(): StorageDocument {
  * perfectly and is still corrupt. Treating it as a valid document would mean
  * reading `undefined` merchants and writing the result back over the GM's data.
  */
+/**
+ * Does this parsed payload announce a schema newer than the one this build
+ * owns?
+ *
+ * Deliberately the *only* thing it looks at. Nothing else about the document
+ * can be trusted to match this build's expectations — that is what a higher
+ * version means — so anything beyond reading the number would be this build
+ * judging a format it does not know.
+ */
+function isFutureVersion(value: unknown): value is { schemaVersion: number } {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const version = (value as Record<string, unknown>).schemaVersion;
+
+  return typeof version === "number" && version > SCHEMA_VERSION;
+}
+
+/**
+ * Is the *document* the right shape?
+ *
+ * Deliberately says nothing about the merchants inside it. The two questions
+ * have different answers and, more importantly, different consequences: a
+ * document with no `saved` array is unusable and gets quarantined, while a
+ * document holding nineteen good merchants and one damaged one is mostly fine
+ * and must stay that way. Validating elements here would wire the second case
+ * to the first case's response and destroy the nineteen — which is exactly what
+ * it did until this was split (see {@link salvage}).
+ */
 function isStorageDocument(value: unknown): value is StorageDocument {
   if (typeof value !== "object" || value === null) {
     return false;
@@ -228,9 +301,36 @@ function isStorageDocument(value: unknown): value is StorageDocument {
   return (
     typeof candidate.schemaVersion === "number" &&
     Array.isArray(candidate.saved) &&
-    // An absent `transient` fails both arms: `typeof undefined` is not "object".
+    // Present, and an object or null — `typeof undefined` is not "object", so
+    // an absent `transient` key still fails. What is *in* it is `salvage`'s
+    // problem, not this one.
     (candidate.transient === null || typeof candidate.transient === "object")
   );
+}
+
+/**
+ * Keep every merchant this build can read, drop the ones it cannot.
+ *
+ * The counterpart to {@link isStorageDocument}: that one decides whether the
+ * document is usable at all, this one decides what inside it is usable. The
+ * split is the whole point. Element-level damage must not cost document-level
+ * destruction — a GM with one truncated record still has the rest, and
+ * `isMerchant`'s own rationale says so: rejecting a whole merchant over one bad
+ * field would discard saved work to enforce a vocabulary that is allowed to
+ * change. The same argument applies one level up.
+ *
+ * Dropping is not silent: the count comes back so the read can say how many
+ * records this build could not read. Without the drop, `listSaved` hands junk
+ * out typed as `Merchant[]` and the next `renameMerchant` throws a `TypeError`
+ * out of a module whose first line promises it never throws.
+ */
+function salvage(doc: StorageDocument): { doc: StorageDocument; dropped: number } {
+  const saved = doc.saved.filter(isMerchant);
+  const transient = doc.transient !== null && isMerchant(doc.transient) ? doc.transient : null;
+
+  const dropped = doc.saved.length - saved.length + (doc.transient !== null && transient === null ? 1 : 0);
+
+  return dropped === 0 ? { doc, dropped: 0 } : { doc: { ...doc, saved, transient }, dropped };
 }
 
 /**
@@ -248,8 +348,36 @@ function isStorageDocument(value: unknown): value is StorageDocument {
  * never evicting anything. They accumulate, and that is an accepted cost.
  */
 function quarantine(store: StorageLike, raw: string): ReadResult {
+  // Already latched means an earlier quarantine of these same bytes failed
+  // partway. Copying them aside *again* is what turns a corrupt document on a
+  // near-full store into unbounded growth, and the copy below writes through
+  // `store.setItem` directly rather than `writeDocument`, so the latch does not
+  // stop it on its own — this check is what makes the latch mean what it says.
+  //
+  // Not retrying costs nothing: the previous attempt failed because the store
+  // was full, the bytes are still under the main key, and they stay
+  // recoverable by hand either way.
+  if (readOnly) {
+    return { status: "unreadable" };
+  }
+
+  // The timestamp is for the human reading devtools; the id is what makes the
+  // key unique. `toISOString()` is millisecond-resolution and `Date.now()` is
+  // not monotonic — an NTP step or a clock change can repeat one — so on its
+  // own it let a second quarantine inside the same millisecond overwrite the
+  // first. That first copy can be the only surviving copy of the GM's library,
+  // destroyed by the routine whose whole purpose is to preserve it.
+  const corruptKey = `${CORRUPT_KEY_PREFIX}${new Date().toISOString()}-${newMerchantId()}`;
+
   try {
-    store.setItem(`${CORRUPT_KEY_PREFIX}${new Date().toISOString()}`, raw);
+    // Belt and braces: never write over a side key that already exists, however
+    // the name was arrived at. Preserving beats tidiness here.
+    if (store.getItem(corruptKey) !== null) {
+      readOnly = true;
+      return { status: "unreadable" };
+    }
+
+    store.setItem(corruptKey, raw);
   } catch {
     readOnly = true;
     return { status: "unreadable" };
@@ -257,7 +385,17 @@ function quarantine(store: StorageLike, raw: string): ReadResult {
 
   if (writeDocument(emptyDocument(), store).status !== "ok") {
     // The copy landed, so nothing is lost, but the corrupt bytes are still
-    // under the main key and the next read will quarantine them again.
+    // under the main key — and the next read would quarantine them again,
+    // writing *another* full copy under a new timestamped key. `readDocument`
+    // runs on mount, on every cross-tab `storage` event and inside every
+    // mutation, so without the latch a corrupt document on a near-full store
+    // grows the store on its own, in a module that never reclaims anything.
+    //
+    // The latch is the same one the failed-copy path above sets, for the same
+    // reason: stop writing until someone intervenes. It also makes the
+    // `unreadable` contract true — the caller is told nothing was touched, so
+    // nothing more may be.
+    readOnly = true;
     return { status: "unreadable" };
   }
 
@@ -269,9 +407,22 @@ export function readDocument(storage?: StorageLike): ReadResult {
   if (!store) {
     return { status: "unavailable" };
   }
-  if (probeWritable(store) === "unavailable") {
-    return { status: "unavailable" };
-  }
+  // Probe, but do not give up on the read. A store can refuse writes and still
+  // hand back everything it holds — Safari's private mode is exactly that
+  // shape. `probeWritable`'s own reasoning says a *full* store must stay
+  // readable because "refusing to read it would lose merchants that are sitting
+  // right there"; the same is true of a write-refusing one, and returning early
+  // here hid a GM's whole library behind a "storage is off" banner while the
+  // bytes sat intact one `getItem` away.
+  //
+  // The latch counts as unwritable even on a store that would accept the write.
+  // It is module-level and survives the store it was set on, so a page latched
+  // by a `future-version` read in one tab must not tell the next reader the
+  // coast is clear — reads stayed `ok` while every write was refused with a
+  // status that raises no notice, which is a correction disappearing in
+  // silence. Skipping the probe when latched is also why the probe is no longer
+  // the one write that outlives "refuse every write for this page load".
+  const writable = readOnly ? "unavailable" : probeWritable(store);
 
   let raw: string | null;
   try {
@@ -281,7 +432,8 @@ export function readDocument(storage?: StorageLike): ReadResult {
   }
 
   if (raw === null) {
-    return { status: "empty" };
+    // Nothing to show either way, so the write refusal is the only news.
+    return writable === "unavailable" ? { status: "unavailable" } : { status: "empty" };
   }
 
   let parsed: unknown;
@@ -291,17 +443,28 @@ export function readDocument(storage?: StorageLike): ReadResult {
     return quarantine(store, raw);
   }
 
-  if (!isStorageDocument(parsed)) {
-    return quarantine(store, raw);
-  }
-
-  if (parsed.schemaVersion > SCHEMA_VERSION) {
-    // The AGENTS.md scenario: a Worker rollback reverted the script but not this
-    // device's storage. Leave the document strictly untouched — no rewrite, no
-    // field-stripping, no quarantine — and refuse writes from here on, because
-    // the very next one would strip whatever the newer build added.
+  // The version is read BEFORE the shape, and the order is the whole point.
+  //
+  // `isStorageDocument` describes *v1's* layout. A newer build is free to move
+  // those fields around — restructuring is the usual reason to bump a version
+  // at all — so validating shape first would classify every reshaped v2
+  // document as corrupt, quarantine it, and overwrite the main key with an
+  // empty v1 document. That is the precise data loss AGENTS.md's forward-only
+  // rule exists to prevent, committed by the code meant to honour it.
+  //
+  // A document this build does not own is not this build's to validate.
+  //
+  // The AGENTS.md scenario: a Worker rollback reverted the script but not this
+  // device's storage. Leave the document strictly untouched — no rewrite, no
+  // field-stripping, no quarantine — and refuse writes from here on, because
+  // the very next one would strip whatever the newer build added.
+  if (isFutureVersion(parsed)) {
     readOnly = true;
     return { status: "future-version", found: parsed.schemaVersion };
+  }
+
+  if (!isStorageDocument(parsed)) {
+    return quarantine(store, raw);
   }
 
   if (parsed.schemaVersion < SCHEMA_VERSION) {
@@ -310,11 +473,50 @@ export function readDocument(storage?: StorageLike): ReadResult {
     // format, so there is nothing below it to migrate from and this branch has
     // no live case yet. No runner, no registry: building a framework around zero
     // migrations means guessing at the shape it has to support.
+    //
+    // **It fails closed, and that is the point.** Falling through would hand the
+    // caller an un-migrated document still carrying its old version, and `save`
+    // stamps `SCHEMA_VERSION` onto whatever it writes — so the first write after
+    // v2 ships would relabel a v1 document as v2 without migrating it, silently
+    // and permanently. Refusing to write until a migration exists is the only
+    // behaviour that cannot corrupt data by omission. Whoever adds a migration
+    // deletes this return along with writing it.
+    readOnly = true;
+    return { status: "needs-migration", found: parsed.schemaVersion };
   }
 
-  return { status: "ok", doc: parsed };
+  // Unreadable merchants are dropped, the rest are kept. Never quarantine over
+  // this: the document is fine, some records in it are not.
+  const { doc, dropped } = salvage(parsed);
+
+  if (writable === "unavailable") {
+    // The document is real and the GM should see it; the store just will not
+    // accept changes. Latch so every later write says so rather than appearing
+    // to succeed, and hand the document over anyway.
+    readOnly = true;
+    // `dropped` rides along here too. A write-refusing store salvages exactly
+    // like a writable one, and dropping the count on this branch would make the
+    // loss silent for precisely the GM who cannot re-save to recover from it.
+    return dropped === 0 ? { status: "read-only", doc } : { status: "read-only", doc, dropped };
+  }
+
+  return dropped === 0 ? { status: "ok", doc } : { status: "ok", doc, dropped };
 }
 
+/**
+ * Replace the whole document. **Not for callers outside this module.**
+ *
+ * Exported for tests, which need to seed a document directly. Application code
+ * must use the named operations instead — they all go `loadForWrite` → `save`,
+ * re-reading immediately before they write so a change from another tab is
+ * never overwritten blind.
+ *
+ * This is the one function in the public surface that can shrink `saved`
+ * without reading it first, which makes it the only wholesale-clobber
+ * affordance in an API whose entire guarantee is that a saved merchant does not
+ * vanish. It still honours the read-only latch and still reports quota failures
+ * — the hazard is the caller, not the write.
+ */
 export function writeDocument(doc: StorageDocument, storage?: StorageLike): WriteResult {
   if (readOnly) {
     return { status: "read-only" };
@@ -345,6 +547,14 @@ export function writeDocument(doc: StorageDocument, storage?: StorageLike): Writ
 function loadForWrite(
   storage?: StorageLike,
 ): { status: "ok"; doc: StorageDocument } | Exclude<WriteResult, { status: "ok" }> {
+  // The latch first, before anything is read. Without this a latched page whose
+  // read happens to come back `ok` or `empty` falls through to the id checks
+  // and reports `not-found` — which maps to no notice — so the GM is told
+  // nothing about a write that was never going to land.
+  if (readOnly) {
+    return { status: "read-only" };
+  }
+
   const read = readDocument(storage);
 
   switch (read.status) {
@@ -356,9 +566,13 @@ function loadForWrite(
       // document under the main key, so there is something valid to build on.
       return { status: "ok", doc: emptyDocument() };
     case "future-version":
+    case "needs-migration":
     case "unreadable":
-      // Both engaged the latch. Writing now would overwrite the data the
-      // detection exists to protect.
+    case "read-only":
+      // All three engaged the latch. For the first two, writing now would
+      // overwrite the data the detection exists to protect; for the third the
+      // store would refuse the write anyway. The document `read-only` carries
+      // is for display, not for building a write on.
       return { status: "read-only" };
     case "unavailable":
       return { status: "unavailable" };
@@ -410,6 +624,19 @@ export function promoteTransient(storage?: StorageLike): PromoteResult {
     return { status: "not-found" };
   }
 
+  // `structuredClone` is deliberate but **unobservable**, and that is recorded
+  // here so nobody mistakes it for the thing doing the work.
+  //
+  // What actually makes a saved record unreachable from a later generate is the
+  // fresh `id` below plus the JSON boundary: `save` serializes the whole
+  // document before any caller can touch this object, and `transient` is itself
+  // a fresh `JSON.parse` product, so no array here is shared with anything that
+  // outlives the call. Verified by mutation — removing the clone changes no
+  // test and no behaviour, because there is no observable difference to change.
+  //
+  // It stays as cheap insurance for the day a caller keeps the returned record
+  // and this function stops re-reading first. Do not add a test for it: a test
+  // that passes with and without the line it names is worse than no test.
   const promoted: Merchant = {
     ...structuredClone(transient),
     id: newMerchantId(),
@@ -498,9 +725,17 @@ export function listSaved(storage?: StorageLike): ListResult {
   if (read.status === "empty") {
     return { status: "ok", merchants: [] };
   }
-  if (read.status !== "ok") {
-    return read;
+
+  // `read-only` carries a document, so it belongs with `ok` here. Returning it
+  // unchanged handed the caller a *failure* member whose merchants sat in a
+  // field called `doc` — so anything reading `.merchants` saw nothing and a
+  // Safari-private-mode GM's whole library disappeared. That is the loss
+  // `read-only` was introduced to prevent, and it was fixed on one of the two
+  // read surfaces. Whether writes are refused is the writer's problem; this
+  // function answers "what is saved", and the answer is the same either way.
+  if (read.status === "ok" || read.status === "read-only") {
+    return { status: "ok", merchants: read.doc.saved };
   }
 
-  return { status: "ok", merchants: read.doc.saved };
+  return read;
 }

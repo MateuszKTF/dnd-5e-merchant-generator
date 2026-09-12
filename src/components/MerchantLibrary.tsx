@@ -60,7 +60,7 @@ export default function MerchantLibrary({ saved, openedSavedId, onOpen, onRename
         }}
         // h-11 keeps the tap target comfortable on a phone; this bar is the
         // panel's entire footprint while collapsed.
-        className="flex h-11 w-full items-center justify-between rounded-md border border-neutral-300 bg-white px-3 text-left"
+        className="flex h-11 w-full items-center justify-between rounded-md border border-neutral-500 bg-white px-3 text-left"
       >
         <span className="font-medium">Zapisani kupcy</span>
         <span className="text-sm text-neutral-500">
@@ -90,7 +90,7 @@ export default function MerchantLibrary({ saved, openedSavedId, onOpen, onRename
               placeholder="Szukaj po nazwie lub rodzaju"
               // `type="search"` brings the browser's own clear affordance, and
               // h-11 keeps the field a comfortable tap target at 360 px.
-              className="h-11 w-full rounded-md border border-neutral-300 bg-white px-3"
+              className="h-11 w-full rounded-md border border-neutral-500 bg-white px-3"
             />
 
             {/* Said out loud while filtering, because the panel is showing a
@@ -237,7 +237,12 @@ function MerchantRow({ merchant, isOpen, onOpen, onRename, onDelete }: RowProps)
             commit(event.target.value);
           }}
           onKeyDown={handleKeyDown}
-          className="min-w-0 flex-1 rounded-sm border border-transparent bg-transparent px-1 py-1 font-medium focus:border-neutral-400 focus:bg-white focus:outline-none"
+          // `min-h-11` and a real focus indicator, matching the edit cells in
+          // the table. This is the one text field a thumb must hit, its focus
+          // selects the whole name, and blur commits the rename irreversibly —
+          // so a 28px target with a ~2.6:1 hairline for focus was the worst
+          // combination in the app on the control that forgives least.
+          className="min-h-11 min-w-0 flex-1 rounded-sm border border-transparent bg-transparent px-2 font-medium focus:border-neutral-500 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-neutral-800"
         />
 
         {isOpen && <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-white">otwarty</span>}

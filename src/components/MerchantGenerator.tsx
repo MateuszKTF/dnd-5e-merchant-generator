@@ -1,24 +1,25 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import ConfirmDialog from "@/components/ConfirmDialog";
 import MerchantLibrary from "@/components/MerchantLibrary";
 import MerchantTable from "@/components/MerchantTable";
-import StorageNotice, { type StorageCondition } from "@/components/StorageNotice";
+import StorageNotice, { isStandingCondition, type StorageCondition } from "@/components/StorageNotice";
 import { Button } from "@/components/ui/button";
 import { CATEGORIES, WEALTH_LEVELS, type CategoryId, type Wealth } from "@/data/items";
 import { AssortmentPoolError, generateAssortment, type AssortmentRow } from "@/lib/assortment";
 import { hasCorrections, type Correction, type CorrectionMap } from "@/lib/corrections";
 import {
   autoName,
+  fromStoredCorrections,
   fromStoredRows,
   newMerchantId,
+  toStoredCorrections,
   toStoredRows,
   type Merchant,
-  type StoredCorrection,
-  type StoredCorrections,
 } from "@/lib/merchant";
 import {
   nextSaveSession,
+  nextSaveState,
   openedSavedIdFor,
   wouldLoseCorrections,
   restoreFromDocument,
@@ -116,6 +117,36 @@ function confirmCopyFor(action: PendingAction): ConfirmCopy {
 }
 
 /**
+ * Would replacing what is on screen destroy something unrecoverable?
+ *
+ * Module scope and fully explicit about its inputs so that **every site asking
+ * this question gets the same answer**. It used to be asked two ways — the
+ * gate called `wouldLoseCorrections` while the cross-tab handler called bare
+ * `hasCorrections` — and the second one warned about losses that had not
+ * happened, which is the cry-wolf failure the guard exists to avoid.
+ *
+ * Taking its arguments rather than closing over state is what lets the
+ * `storage` effect call it without a stale closure: the effect lists these
+ * values in its dependencies, and a plain method on the component would hide
+ * that requirement.
+ */
+function wouldLoseWork(
+  rows: readonly AssortmentRow[] | null,
+  corrections: CorrectionMap,
+  openedSavedId: string | null,
+  autosaveFailed: boolean,
+): boolean {
+  // An open record only counts as somewhere the work lives if its last write
+  // actually landed. A failed autosave makes this screen the only copy again.
+  const holdingTheWork = openedSavedId !== null && !autosaveFailed;
+
+  return wouldLoseCorrections(
+    rows !== null && hasCorrections(rows, corrections),
+    holdingTheWork ? openedSavedId : null,
+  );
+}
+
+/**
  * What the save button says. Only one dimension is left to be honest about —
  * whether the last press landed — because the button is not rendered at all
  * once a record is open.
@@ -135,31 +166,6 @@ function saveButtonLabel(state: SaveState): string {
 function reopenEvent(doc: StorageDocument): SaveSessionEvent {
   const openedId = openedSavedIdFor(doc);
   return openedId === null ? { event: "restored" } : { event: "opened", savedId: openedId };
-}
-
-/**
- * The overlay as storage holds it.
- *
- * S-02's map types its values `Correction | undefined` — most rows have no
- * entry and `noUncheckedIndexedAccess` is off — while the stored format has no
- * such hole. Built field by field rather than spread, matching `toStoredRows`:
- * an absent key must stay absent, because `isCorrected` reads "never touched"
- * from the absence itself.
- */
-function toStoredCorrections(corrections: CorrectionMap): StoredCorrections {
-  const stored: StoredCorrections = {};
-
-  for (const [itemId, correction] of Object.entries(corrections)) {
-    if (!correction) continue;
-
-    const entry: StoredCorrection = {};
-    if (correction.quantity !== undefined) entry.quantity = correction.quantity;
-    if (correction.priceGp !== undefined) entry.priceGp = correction.priceGp;
-
-    stored[itemId] = entry;
-  }
-
-  return stored;
 }
 
 /**
@@ -223,6 +229,29 @@ export default function MerchantGenerator() {
 
   const [error, setError] = useState<string | null>(null);
 
+  // Did the last autosave into the open record fail?
+  //
+  // The FR-006 guard stands down while a saved record is open, on the grounds
+  // that every correction is written to it the moment it is committed. That is
+  // only true while the writes land. `autosaveOpened` is best-effort — a full
+  // store, a disabled one, or a record another tab deleted all leave the
+  // correction in React state and nowhere else — so without this the guard
+  // would wave through a Generate that destroys work the GM was never asked
+  // about. `openedSavedId` alone cannot answer the question: it means "was
+  // opened", not "is holding the work".
+  const [autosaveFailed, setAutosaveFailed] = useState(false);
+
+  /**
+   * The transient slot as this tab last saw it, serialized.
+   *
+   * A ref, not state: nothing renders from it, and it must be readable inside
+   * the `storage` listener without being a dependency that re-subscribes. It
+   * exists so the listener can tell "another tab replaced the merchant" from
+   * "another tab renamed something else" — the `storage` event fires for the
+   * whole document, because the whole document lives under one key.
+   */
+  const lastTransient = useRef<string | undefined>(undefined);
+
   // What is being persisted, minus the rows. `null` alongside `rows === null`.
   const [header, setHeader] = useState<MerchantHeader | null>(null);
 
@@ -241,8 +270,41 @@ export default function MerchantGenerator() {
   // failure surface with no sensible answer to which result wins.
   const [saved, setSaved] = useState<readonly Merchant[]>([]);
 
-  // The storage problem to show, if any. `null` is the ordinary case.
-  const [storageStatus, setStorageStatus] = useState<StorageCondition | null>(null);
+  /**
+   * The storage problems to show. Empty is the ordinary case.
+   *
+   * A set rather than one slot, because the two facts that arrive together are
+   * both worth saying: `readDocument` carries `dropped` on its `read-only`
+   * branch on purpose, and a single slot was letting the second `setState` of
+   * the same commit throw the first away — so a GM whose records vanished was
+   * told that and not that the store will refuse the re-save that might have
+   * recovered them.
+   *
+   * Raised by {@link raise}, thinned by {@link clearEpisodic}. Nothing assigns
+   * this directly.
+   */
+  const [conditions, setConditions] = useState<readonly StorageCondition[]>([]);
+
+  /** Say something once. Raising the same condition twice is not two problems. */
+  const raise = useCallback((condition: StorageCondition) => {
+    setConditions((current) => (current.includes(condition) ? current : [...current, condition]));
+  }, []);
+
+  /**
+   * A write landed, so everything that described a failed attempt is over.
+   *
+   * This is the half that was missing entirely: eleven sites raised a condition
+   * and none ever cleared one, so the banner telling the GM to delete merchants
+   * stayed up after they did and the next save succeeded — contradicting a
+   * success they could see, on the one screen whose credibility the guardrail
+   * depends on. The standing conditions survive; see `isStandingCondition`.
+   */
+  const clearEpisodic = useCallback(() => {
+    setConditions((current) => {
+      const next = current.filter(isStandingCondition);
+      return next.length === current.length ? current : next;
+    });
+  }, []);
 
   /**
    * The save session, with the opened record reconciled against the list.
@@ -259,15 +321,28 @@ export default function MerchantGenerator() {
    * delete, the cross-tab delete, and any future path that removes a record —
    * and it does it without an effect that syncs state to state.
    *
+   * **Both halves move, from one question.** Deriving only the id left `state`
+   * on `saved`, so the button kept reading "Zapisano" — disabled — over a
+   * merchant no library record holds. The local delete papered over that with
+   * its own explicit `cleared-open`, which is why the rule looked total while
+   * two paths went around it: another tab's delete arrives through the
+   * `storage` listener and returns before `adopt` (`deleteMerchant` leaves the
+   * transient untouched, so the bytes compare equal), and rename's `not-found`
+   * drops the row here in the component. Neither dispatches anything.
+   *
+   * Answering with `nextSaveState` rather than a literal keeps the transition
+   * table the single authority: `cleared-open` is the identity from every state
+   * except `saved`, which re-arms, and this code does not restate that.
+   *
    * The stored id is left alone; nothing reads it directly. Everything below
    * reads this.
    */
+  const openRecordGone =
+    storedSession.openedSavedId !== null && !saved.some((entry) => entry.id === storedSession.openedSavedId);
+
   const session: SaveSession = {
-    state: storedSession.state,
-    openedSavedId:
-      storedSession.openedSavedId !== null && saved.some((entry) => entry.id === storedSession.openedSavedId)
-        ? storedSession.openedSavedId
-        : null,
+    state: openRecordGone ? nextSaveState(storedSession.state, "cleared-open") : storedSession.state,
+    openedSavedId: openRecordGone ? null : storedSession.openedSavedId,
   };
 
   // The guardrail. Non-null means an irreversible action is pending the GM's
@@ -294,10 +369,17 @@ export default function MerchantGenerator() {
     const { merchant } = restored;
 
     setRows(fromStoredRows(merchant.rows));
-    setCorrections(merchant.corrections);
+    setCorrections(fromStoredCorrections(merchant.corrections));
     setCategory(restored.category);
     setWealth(restored.wealth);
     setRecentIds(restored.recentIds);
+    // Whatever is arriving came out of storage, so it is by definition already
+    // stored. A failure recorded against the record being replaced must not
+    // outlive it, or the guard would fire over work that is not at risk.
+    setAutosaveFailed(false);
+    // Same reason: this merchant is now what the slot holds as far as this tab
+    // knows, so a later `storage` event carrying it is not a replacement.
+    lastTransient.current = JSON.stringify(merchant);
     setHeader({
       id: merchant.id,
       name: merchant.name,
@@ -315,20 +397,40 @@ export default function MerchantGenerator() {
   /**
    * Route a read that did not come back `ok`, from either read site.
    *
-   * `future-version` stands persistence down for the rest of the page load:
-   * F-01 has latched read-only, so every subsequent write would be refused, and
-   * a button that invites the attempt invites the one write the latch exists to
-   * prevent. The other three raise their notice and change nothing else —
-   * a disabled or full store is recoverable, and the GM should be able to press
-   * Save, read the failure and act on it.
+   * **`future-version`, `needs-migration` and `unreadable` stand persistence
+   * down** for the rest of the page load. F-01 latches read-only on all three,
+   * so every subsequent write would be refused, and a button that invites the
+   * attempt invites the one write the latch exists to prevent.
+   *
+   * The rule that separates them from the rest is recoverability *from inside
+   * this build*: a document a newer build owns, one older than any migration
+   * this build carries, and one whose quarantine could not be written are all
+   * dead ends here — the latch is absorbing for the page load, so no amount of
+   * GM action changes them without a reload. A disabled or full store is the
+   * opposite: recoverable by re-enabling site data or freeing space, which is
+   * why those raise their notice and leave the button pressable so the failure
+   * can name its remedy. `quarantined` belongs with them and not here — the
+   * copy aside succeeded, which means the store took a write.
+   *
+   * Membership is not a judgement call. Every `unreadable` return in
+   * `quarantine` either sets the latch or is guarded by it, so the status and
+   * the latch are the same fact stated twice; `StorageNotice`'s own docblock
+   * has said so since S-03.
+   *
+   * Getting this boundary wrong in either direction has a cost. Standing down
+   * too eagerly hides a remedy behind a dead control; not standing down leaves
+   * a live button whose press can only fail silently.
    */
-  const handleFailedRead = useCallback((status: Exclude<ReadResult["status"], "ok" | "empty">) => {
-    setStorageStatus(status);
+  const handleFailedRead = useCallback(
+    (status: Exclude<ReadResult["status"], "ok" | "empty" | "read-only">) => {
+      raise(status);
 
-    if (status === "future-version") {
-      setSession((current) => nextSaveSession(current, { event: "persistence-off" }));
-    }
-  }, []);
+      if (status === "future-version" || status === "needs-migration" || status === "unreadable") {
+        setSession((current) => nextSaveSession(current, { event: "persistence-off" }));
+      }
+    },
+    [raise],
+  );
 
   /**
    * Bring back the last merchant, with no GM action.
@@ -355,7 +457,33 @@ export default function MerchantGenerator() {
     const read = readDocument();
 
     switch (read.status) {
+      case "read-only":
+      // A store that reads but refuses writes — Safari's private mode. The
+      // merchants are right there, so show them; the banner below says they
+      // cannot be added to. Falls through deliberately: restoring is identical,
+      // only the notice differs.
+      // eslint-disable-next-line no-fallthrough
       case "ok": {
+        if (read.status === "read-only") {
+          // The notice, but deliberately **not** `persistence-off`. S-03's
+          // asymmetry: only `future-version` stands persistence down, because
+          // only it means "do not write at all". A store that merely refuses
+          // writes — Safari's private mode — is recoverable, and `stood-down`
+          // is absorbing, so disarming here would kill the button for the rest
+          // of the page load and hide the remedy along with it. The GM presses
+          // Save, the write fails, and the failure names something they can
+          // act on. See `merchant-session.ts`, `SaveState`.
+          raise("unavailable");
+        }
+
+        // Records F-01 could not read are gone from `saved`, and the next write
+        // persists the list without them — so this is the only moment the loss
+        // can be named. Without it the guardrail fails exactly as it forbids:
+        // the GM's merchants disappear, quietly, on their next Generate.
+        if (read.dropped !== undefined) {
+          raise("records-dropped");
+        }
+
         // The saved collection comes off THIS read, not a sibling `listSaved()`
         // — and it is set whether or not there is a transient record to
         // restore, because a GM can have a library with nothing on screen.
@@ -375,12 +503,24 @@ export default function MerchantGenerator() {
 
       case "unavailable":
       case "future-version":
+      case "needs-migration":
       case "quarantined":
       case "unreadable":
         handleFailedRead(read.status);
         return;
+
+      default: {
+        // Exhaustiveness, enforced rather than assumed. This callback returns
+        // `void`, so a missing case is not a type error on its own — which is
+        // how `needs-migration` was added to `ReadResult` and silently ignored
+        // here, leaving a GM with an older document staring at an empty
+        // generator and no banner. The assignment below fails to compile the
+        // moment a member is added without a case for it.
+        const unhandled: never = read;
+        return unhandled;
+      }
     }
-  }, [adopt, handleFailedRead]);
+  }, [adopt, handleFailedRead, raise]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   /**
@@ -400,7 +540,11 @@ export default function MerchantGenerator() {
 
       const read = readDocument();
 
-      if (read.status !== "ok") {
+      // `read-only` carries a real document, so it joins `ok` on the adopt
+      // path rather than the failure path: the other tab's write landed before
+      // this store stopped accepting them, and refusing to show it would hide
+      // a merchant that exists.
+      if (read.status !== "ok" && read.status !== "read-only") {
         // A tab that was working fine can re-read into `quarantined`,
         // `future-version` or `unreadable` mid-session — another tab may be
         // running a newer build, or the store may have filled since mount. In
@@ -415,22 +559,90 @@ export default function MerchantGenerator() {
         return;
       }
 
+      if (read.status === "read-only") {
+        // The same notice the mount read raises for the same status, and for
+        // the same reason — this is the site where the latch can engage for the
+        // FIRST time mid-session: the store filled or was disabled after mount,
+        // `probeWritable` fails on this re-read, and F-01 latches. Without this
+        // the tab adopts the incoming merchant and every write from then on
+        // comes back `read-only`, which `conditionFromFailure` maps to no notice
+        // — persistence stopped, with nothing on screen saying so.
+        raise("unavailable");
+      }
+
       // Only an `ok` re-read may refresh the library — the same rule this
       // handler already applies to adopting the transient record. Every other
       // outcome means there is no trustworthy collection to swap in, and
       // emptying the panel on the strength of another tab's failure would read
       // as the GM's saved merchants having disappeared.
+      // As on mount: a salvaging read drops records, and the next write makes
+      // that permanent. Cross-tab is if anything the likelier route here — the
+      // other tab may be a build that wrote a shape this one cannot read.
+      if (read.dropped !== undefined) {
+        raise("records-dropped");
+      }
+
       setSaved(read.doc.saved);
 
       const incoming = restoreFromDocument(read.doc);
       if (incoming === null) return;
 
+      // **Did the write touch the transient slot at all?**
+      //
+      // The event fires for the whole document, because the whole document
+      // lives under one key — so a rename or a delete of a merchant the GM is
+      // not looking at arrives here identically to a fresh draw in another tab.
+      // Everything below replaces or interrupts what is on screen, and none of
+      // it is warranted when the slot did not move: a rename in tab B was
+      // closing tab A's open confirmation under the GM's thumb.
+      //
+      // Compared by value, not by id. Same-id-different-corrections is a real
+      // update — the other tab corrected the record both tabs have open — and
+      // an id check would drop it silently, trading this bug for a worse one.
+      const incomingBytes = JSON.stringify(read.doc.transient);
+      if (incomingBytes === lastTransient.current) {
+        return;
+      }
+      lastTransient.current = incomingBytes;
+
       // Only hand corrections earn the notice. A superseded draw is visible on
       // its own — the table simply changes — but corrections are work the GM
       // did by hand and cannot get back, so their loss must be said out loud.
-      if (rows !== null && hasCorrections(rows, corrections)) {
-        setStorageStatus("superseded");
+      //
+      // The same question the gate asks, so the two cannot disagree: with a
+      // record open and its writes landing, the incoming corrections ARE the
+      // saved ones and nothing was lost — announcing a loss there would train
+      // the GM to ignore the notice that matters.
+      // **Two tabs on the SAME open record — the case the gate cannot see.**
+      //
+      // `wouldLoseWork` stands down whenever a record is open, on the grounds
+      // that the incoming corrections ARE the ones this tab saved. That is true
+      // only while the incoming write derives from this tab's.
+      // `updateSavedMerchant` replaces `rows` and `corrections` wholesale from
+      // the writing tab's overlay — it does not merge — so tab B correcting a
+      // quantity erases tab A's price correction from the record *and* from A's
+      // screen, which is the guardrail's own wording.
+      //
+      // No comparison of the two overlays is needed. The equality guard above
+      // has already established that these bytes differ from the last ones this
+      // tab successfully wrote, and a tab that holds hand corrections is by
+      // definition having them replaced.
+      const openRecordReplaced =
+        session.openedSavedId !== null &&
+        incoming.merchant.id === session.openedSavedId &&
+        rows !== null &&
+        hasCorrections(rows, corrections);
+
+      if (openRecordReplaced || wouldLoseWork(rows, corrections, session.openedSavedId, autosaveFailed)) {
+        raise("superseded");
       }
+
+      // The incoming merchant really is a different one, so an open dialog is
+      // asking about state that has moved underneath it: its pending action
+      // carries a snapshot from before this write. Confirming it could act on a
+      // record that is no longer there. Closing the question is right — the GM
+      // can re-ask it against what is actually on screen now.
+      setPending(null);
 
       adopt(incoming, reopenEvent(read.doc));
     }
@@ -439,7 +651,10 @@ export default function MerchantGenerator() {
     return () => {
       window.removeEventListener("storage", handleStorageEvent);
     };
-  }, [adopt, handleFailedRead, rows, corrections]);
+    // `session.openedSavedId` and `autosaveFailed` are listed because
+    // `wouldLoseWork` reads them: without them the listener would answer with
+    // whichever values were current when it was last attached.
+  }, [adopt, handleFailedRead, raise, rows, corrections, session.openedSavedId, autosaveFailed]);
 
   /**
    * Commit a half-typed edit before the page goes away.
@@ -487,8 +702,20 @@ export default function MerchantGenerator() {
    *
    * A failed write never throws and never blocks generating or editing; it is
    * recorded and, from Phase 3, shown.
+   *
+   * **It returns whether the slot now holds what is on screen**, because one
+   * caller has to know. `promoteTransient` takes no argument — it promotes
+   * whatever is in the slot — so a `handleSave` that assumed a successful
+   * persist would promote the *previous* merchant after a failed one. That is
+   * reachable along the path the product's own copy recommends: the store fills,
+   * the notice says to delete some merchants, the GM does, and now there is room
+   * for a promote of the wrong record.
    */
-  function persist(merchantHeader: MerchantHeader, nextRows: readonly AssortmentRow[], nextCorrections: CorrectionMap) {
+  function persist(
+    merchantHeader: MerchantHeader,
+    nextRows: readonly AssortmentRow[],
+    nextCorrections: CorrectionMap,
+  ): WriteFailure | "ok" {
     // The stand-down, honoured at both call sites because it lives here. Only
     // `stood-down` refuses the write — F-01 has latched read-only over a
     // document a newer build owns, and writing would strip whatever that build
@@ -496,7 +723,7 @@ export default function MerchantGenerator() {
     // writes should be attempted, so their failure can name a remedy the GM can
     // act on.
     if (session.state === "stood-down") {
-      return;
+      return "read-only";
     }
 
     const merchant: Merchant = {
@@ -512,13 +739,34 @@ export default function MerchantGenerator() {
       corrections: toStoredCorrections(nextCorrections),
     };
 
+    const bytes = JSON.stringify(merchant);
+
     const written = putTransient(merchant);
-    if (written.status !== "ok") {
+
+    // Recorded only once the write has landed, because the ref's whole claim is
+    // "this is what the slot holds". Setting it first made that claim false
+    // after every failed write — the slot still held the PREVIOUS record — and
+    // the next `storage` event from an unrelated write in another tab then
+    // compared unequal, took the replacement path, and adopted the older stored
+    // merchant over the corrections that had just failed to persist. That is
+    // the loss this ref was added to prevent, committed by the ref itself.
+    //
+    // Nothing is given up by waiting: the event never fires in the tab that
+    // wrote, so there was never a race for the assignment to win.
+    if (written.status === "ok") {
+      lastTransient.current = bytes;
+      // Proof that the episodic conditions are over: the store just took a
+      // write. This is the choke point for the four `persist` callers; the
+      // other three mutations clear at their own success branch.
+      clearEpisodic();
+    } else {
       const condition = conditionFromFailure(written.status);
       if (condition !== null) {
-        setStorageStatus(condition);
+        raise(condition);
       }
     }
+
+    return written.status;
   }
 
   /**
@@ -555,7 +803,7 @@ export default function MerchantGenerator() {
 
     const condition = conditionFromFailure(failure);
     if (condition !== null) {
-      setStorageStatus(condition);
+      raise(condition);
     }
   }
 
@@ -575,6 +823,22 @@ export default function MerchantGenerator() {
    * the session records the record as open.
    */
   function addMerchant(): WriteFailure | null {
+    // Re-persist first, and abort if it fails. `promoteTransient` takes no
+    // argument — it copies whatever is in the transient slot — so promoting
+    // without this can append a merchant the GM is not looking at: an earlier
+    // `persist` that failed on a full store leaves the *previous* draw in the
+    // slot, and by the time the GM has freed space and pressed Zapisz there is
+    // room to promote exactly the wrong record, reported as success.
+    //
+    // On the happy path this is a redundant write of bytes already there, which
+    // is the cheap half of a trade against appending the wrong merchant.
+    if (rows !== null && header !== null) {
+      const refreshed = persist(header, rows, corrections);
+      if (refreshed !== "ok") {
+        return refreshed;
+      }
+    }
+
     const result = promoteTransient();
     if (result.status !== "ok") {
       return result.status;
@@ -631,12 +895,36 @@ export default function MerchantGenerator() {
 
     const result = updateSavedMerchant(openedId, patch);
     if (result.status !== "ok") {
-      const condition = conditionFromFailure(result.status);
-      if (condition !== null) {
-        setStorageStatus(condition);
+      if (result.status === "not-found") {
+        // The same discovery `handleRename` makes, by the same call, and it
+        // deserves the same sentence: another tab deleted this record while it
+        // was open here. `conditionFromFailure` maps `not-found` to nothing,
+        // which is right for a promote and wrong here — the correction would
+        // stay on screen, never reach the library, and the row it belonged to
+        // would simply be gone, with no text anywhere saying why.
+        //
+        // Dropping it from the list also re-arms the save button through the
+        // derived session above, so the correction the GM just made can be kept
+        // as a new record instead of being stranded.
+        setSaved((current) => current.filter((entry) => entry.id !== openedId));
+        raise("record-gone");
+      } else {
+        const condition = conditionFromFailure(result.status);
+        if (condition !== null) {
+          raise(condition);
+        }
       }
+
+      // The correction is now in React state and nowhere else, so the FR-006
+      // guard must stop standing down. `read-only` still maps to no notice of
+      // its own — the read that latched raised one — so for that status this
+      // remains the only thing standing between the GM and a silent loss.
+      setAutosaveFailed(true);
       return;
     }
+
+    setAutosaveFailed(false);
+    clearEpisodic();
 
     // The stamp is recomputed rather than read back, so the row's save time and
     // its new position in the list are right without re-parsing the document.
@@ -657,12 +945,25 @@ export default function MerchantGenerator() {
 
     if (result.status === "ok") {
       setSaved((current) => current.map((entry) => (entry.id === id ? { ...entry, name } : entry)));
+      clearEpisodic();
+      return;
+    }
+
+    // `not-found` here does not mean "nothing to do" — it means another tab
+    // deleted this record while the row was on screen. `conditionFromFailure`
+    // maps it to no notice, which is right for a promote (the write that never
+    // landed raised its own) and wrong for a rename: the row would just snap
+    // back to its old name, reading as a rename that failed for no reason
+    // rather than as a merchant that is gone. Drop it from the list and say so.
+    if (result.status === "not-found") {
+      setSaved((current) => current.filter((entry) => entry.id !== id));
+      raise("record-gone");
       return;
     }
 
     const condition = conditionFromFailure(result.status);
     if (condition !== null) {
-      setStorageStatus(condition);
+      raise(condition);
     }
   }
 
@@ -675,7 +976,7 @@ export default function MerchantGenerator() {
    * case where work really does vanish.
    */
   function losesWork(): boolean {
-    return wouldLoseCorrections(rows !== null && hasCorrections(rows, corrections), session.openedSavedId);
+    return wouldLoseWork(rows, corrections, session.openedSavedId, autosaveFailed);
   }
 
   /**
@@ -743,6 +1044,14 @@ export default function MerchantGenerator() {
       case "delete":
         deleteSavedMerchant(confirmed.merchant.id);
         return;
+      default: {
+        // The same guard the mount read carries, for the same reason: this
+        // returns `void`, so a fourth `PendingAction` kind would be a missing
+        // case the compiler says nothing about — and the symptom would be the
+        // guardrail dialog closing on "yes" with the action never taken.
+        const unhandled: never = confirmed;
+        return unhandled;
+      }
     }
   }
 
@@ -762,13 +1071,20 @@ export default function MerchantGenerator() {
     const result = deleteMerchant(id);
 
     if (result.status === "ok" || result.status === "not-found") {
+      // No `cleared-open` dispatch here any more. Dropping the row is enough:
+      // the derived session above answers both halves from "is the open record
+      // still in `saved`", so this path, another tab's delete and rename's
+      // `not-found` all re-arm the button by the same rule instead of by three
+      // handlers remembering to.
       setSaved((current) => current.filter((entry) => entry.id !== id));
+      clearEpisodic();
+
       return;
     }
 
     const condition = conditionFromFailure(result.status);
     if (condition !== null) {
-      setStorageStatus(condition);
+      raise(condition);
     }
   }
 
@@ -816,7 +1132,12 @@ export default function MerchantGenerator() {
         createdAt: merchant.createdAt,
       },
       fromStoredRows(merchant.rows),
-      merchant.corrections,
+      // Through the same converter `adopt` uses two lines up, not the raw
+      // stored map. `persist` runs it back through `toStoredCorrections`, so
+      // the result is identical today — but this was the one call site that
+      // skipped the defensive copy, and "identical today" is not the reason the
+      // converter exists.
+      fromStoredCorrections(merchant.corrections),
     );
   }
 
@@ -850,6 +1171,9 @@ export default function MerchantGenerator() {
       setRecentIds(next.map((row) => row.itemId));
       setError(null);
       setHeader(drawn);
+      // A fresh draw has no corrections and no open record, so any failure
+      // recorded against the previous one is spent.
+      setAutosaveFailed(false);
       // Two events, one commit. `generated` alone would clear `openedSavedId`
       // — the reducer makes sure of that, because an id outliving a draw means
       // the next Zapisz overwrites a saved merchant with an unrelated shop.
@@ -868,9 +1192,11 @@ export default function MerchantGenerator() {
       // reshape tier depth, and an uncaught throw would blank the only page
       // the product has. Nothing is persisted: the last good merchant stays in
       // storage rather than being replaced by a failure.
-      setRows(null);
-      setCorrections({});
-      setHeader(null);
+      //
+      // `rows`, `header` and `corrections` are deliberately left alone. The
+      // failure concerns the draw that did not happen, not the shop the GM is
+      // reading aloud right now — wiping it would destroy a list they cannot
+      // get back, since the re-roll is what just failed.
       setError(
         cause instanceof AssortmentPoolError
           ? "Nie udało się ułożyć asortymentu z dostępnej puli przedmiotów."
@@ -910,14 +1236,19 @@ export default function MerchantGenerator() {
   //
   // Recency is per-shop: carrying it to a different category or wealth would
   // bias a draw for no reason.
+  // Both clear `error` as well as `recentIds`: the message describes a draw
+  // that failed for the shop the GM has just navigated away from, so leaving it
+  // up would attach a stale failure to a selection it never concerned.
   function handleCategoryChange(value: string) {
     setCategory(value as CategoryId);
     setRecentIds([]);
+    setError(null);
   }
 
   function handleWealthChange(value: string) {
     setWealth(value as Wealth);
     setRecentIds([]);
+    setError(null);
   }
 
   // The closed dialog still needs strings for its required props. Falling back
@@ -945,7 +1276,7 @@ export default function MerchantGenerator() {
               handleCategoryChange(e.target.value);
             }}
             // h-11 keeps the tap target comfortable on a phone.
-            className="h-11 rounded-md border border-neutral-300 bg-white px-3"
+            className="h-11 rounded-md border border-neutral-500 bg-white px-3"
           >
             {CATEGORIES.map((option) => (
               <option key={option.id} value={option.id}>
@@ -965,7 +1296,7 @@ export default function MerchantGenerator() {
             onChange={(e) => {
               handleWealthChange(e.target.value);
             }}
-            className="h-11 rounded-md border border-neutral-300 bg-white px-3"
+            className="h-11 rounded-md border border-neutral-500 bg-white px-3"
           >
             {WEALTH_LEVELS.map((option) => (
               <option key={option.id} value={option.id}>
@@ -987,15 +1318,48 @@ export default function MerchantGenerator() {
             Gone entirely once a record is open: that merchant saves itself on
             every correction, so a button here would have nothing to do — and
             the press that used to append a near-identical copy is no longer
-            reachable at all. */}
-        {rows !== null && session.openedSavedId === null && (
-          <Button onClick={handleSave} disabled={session.state !== "armed"} variant="secondary" className="h-11 px-6">
+            reachable at all.
+
+            **The `state === "saved"` arm is what makes a successful save
+            visible.** A promote sets `openedSavedId` in the same commit as
+            `promoted`, so on the first condition alone the button unmounted on
+            the exact commit that would have shown "Zapisano" — the label was
+            unreachable, and the only feedback for the one action the GM takes
+            deliberately to protect their work was a new row in a panel that
+            defaults to collapsed. Keeping it while it reads "Zapisano" shows
+            the confirmation; the next correction re-arms the state, this
+            condition goes false, and it disappears again. It can never be
+            *pressed* with a record open, because `saved` is not `armed`. */}
+        {rows !== null && (session.openedSavedId === null || session.state === "saved") && (
+          <Button
+            onClick={handleSave}
+            disabled={session.state !== "armed"}
+            variant="secondary"
+            // The colours are stated here rather than left to `secondary`,
+            // which falls through to `bg-secondary` — oklch(0.97 0 0), about
+            // 1.05:1 on this page — with no border, so the control had no
+            // visible boundary at all. `neutral-500` is the 3:1 floor AGENTS.md
+            // sets and what the selects and the dialog's Anuluj already use.
+            // It matters most here: this button spends its whole visible life
+            // in the `saved` state, which is never `armed`, so the one thing a
+            // GM does deliberately to protect their work is confirmed by a
+            // control rendered at `disabled:opacity-50`.
+            className="h-11 border border-neutral-500 bg-white px-6 text-neutral-900"
+          >
             {saveButtonLabel(session.state)}
           </Button>
         )}
       </div>
 
-      <StorageNotice condition={storageStatus} />
+      {/* Said out loud, because the visible confirmation is a *disabled* button
+          changing its label — which announces nothing, and cannot be focused to
+          read. Mounted always and empty when there is nothing to say, for the
+          same reason `StorageNotice` is. */}
+      <p role="status" className="sr-only">
+        {session.state === "saved" ? "Kupiec zapisany w bibliotece." : ""}
+      </p>
+
+      <StorageNotice conditions={conditions} />
 
       {/* Above the table, because a GM returning for the next session comes
           here first — and collapsed, so it costs one bar rather than the
@@ -1011,16 +1375,18 @@ export default function MerchantGenerator() {
       {error !== null && (
         <p role="alert" className="mt-6 text-sm text-red-700">
           {error}
+          {rows !== null && " Poniżej poprzedni asortyment — nie został zmieniony."}
         </p>
       )}
 
-      {error === null && rows === null && (
+      {/* Both of these are independent of `error`: a failed re-roll must not
+          hide the assortment the GM is reading, nor swallow the instruction
+          that tells them how to recover. */}
+      {rows === null && (
         <p className="mt-6 text-neutral-600">Wybierz kategorię i zamożność osady, a potem kliknij „Stwórz”.</p>
       )}
 
-      {error === null && rows !== null && (
-        <MerchantTable rows={rows} corrections={corrections} onCorrect={handleCorrect} />
-      )}
+      {rows !== null && <MerchantTable rows={rows} corrections={corrections} onCorrect={handleCorrect} />}
 
       {/* One dialog, three callers — regenerate, open, delete. The copy is
           chosen per action so the sentence the GM agrees to describes the thing

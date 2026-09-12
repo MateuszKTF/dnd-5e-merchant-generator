@@ -17,6 +17,12 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx astro sync
+      # Type errors are invisible to the three steps below: Vitest transpiles
+      # without type-checking and `astro build` does not type-check `.ts`. The
+      # entity contract in src/lib/merchant.test.ts is a compile-time assertion,
+      # so without this step a UI type could gain a field, be dropped silently
+      # on save, and CI would stay green.
+      - run: npm run typecheck
       - run: npm test
       - run: npm run lint
       - run: npm run build

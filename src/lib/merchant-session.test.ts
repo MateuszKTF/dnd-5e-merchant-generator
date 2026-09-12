@@ -16,6 +16,7 @@ import {
   SAVE_STATES,
   type SaveSession,
   type SaveSessionEvent,
+  type SaveEvent,
   type SaveState,
 } from "./merchant-session";
 import { SCHEMA_VERSION, type StorageDocument } from "./merchant-storage";
@@ -70,6 +71,16 @@ describe("restoreFromDocument", () => {
     const malformed = { ...merchant(), rows: undefined as unknown as StoredRow[] };
 
     expect(restoreFromDocument(documentWith(malformed))).toBeNull();
+  });
+
+  it("returns null when the rows are an array of junk, not just absent", () => {
+    // The case the old `Array.isArray` guard let through: it passed, and the
+    // very next line mapped `row.itemId` over `null` and threw — out of a pure
+    // module, inside a mount effect, blanking the only page the product has.
+    const junk = { ...merchant(), rows: [null, 3] as unknown as StoredRow[] };
+
+    expect(restoreFromDocument(documentWith(junk))).toBeNull();
+    expect(() => restoreFromDocument(documentWith(junk))).not.toThrow();
   });
 
   it("derives both controls from the restored merchant", () => {
@@ -246,20 +257,71 @@ describe("isKnownCategory / isKnownWealth", () => {
 });
 
 describe("nextSaveState", () => {
-  it("answers for every event from every state", () => {
-    const visited: SaveState[] = [];
+  /**
+   * The whole table, cell by cell.
+   *
+   * Written out rather than sampled, because every sampled version of this grew
+   * a blind spot: the previous suite asserted an exact value for 23 of the 32
+   * cells, and the nine it missed included `saved` x `restored` — a reload
+   * presenting "Zapisano" over a merchant that was never promoted, which is the
+   * module's own named failure mode. Flipping that cell used to leave the suite
+   * green.
+   *
+   * The `Record<SaveState, Record<SaveEvent, SaveState>>` type is what keeps it
+   * honest: adding a state or an event makes this literal a compile error until
+   * someone decides what the new cells answer, which is exactly the decision
+   * that should not be made by omission.
+   */
+  const EXPECTED: Record<SaveState, Record<SaveEvent, SaveState>> = {
+    unavailable: {
+      generated: "armed",
+      corrected: "armed",
+      restored: "armed",
+      opened: "armed",
+      promoted: "unavailable",
+      "promote-failed": "unavailable",
+      "cleared-open": "unavailable",
+      "persistence-off": "stood-down",
+    },
+    "stood-down": {
+      generated: "stood-down",
+      corrected: "stood-down",
+      restored: "stood-down",
+      opened: "stood-down",
+      promoted: "stood-down",
+      "promote-failed": "stood-down",
+      "cleared-open": "stood-down",
+      "persistence-off": "stood-down",
+    },
+    armed: {
+      generated: "armed",
+      corrected: "armed",
+      restored: "armed",
+      opened: "armed",
+      promoted: "saved",
+      "promote-failed": "armed",
+      "cleared-open": "armed",
+      "persistence-off": "stood-down",
+    },
+    saved: {
+      generated: "armed",
+      corrected: "armed",
+      restored: "armed",
+      opened: "armed",
+      promoted: "saved",
+      "promote-failed": "armed",
+      "cleared-open": "armed",
+      "persistence-off": "stood-down",
+    },
+  };
 
+  it("answers exactly the documented cell for every event from every state", () => {
     for (const state of SAVE_STATES) {
       for (const event of SAVE_EVENTS) {
-        visited.push(nextSaveState(state, event));
+        expect(`${state} x ${event} -> ${nextSaveState(state, event)}`).toBe(
+          `${state} x ${event} -> ${EXPECTED[state][event]}`,
+        );
       }
-    }
-
-    // The count is asserted, not just the membership: a table with a hole would
-    // push `undefined` and still satisfy a loop that never checks it ran.
-    expect(visited).toHaveLength(SAVE_STATES.length * SAVE_EVENTS.length);
-    for (const result of visited) {
-      expect(SAVE_STATES).toContain(result);
     }
   });
 
@@ -269,16 +331,24 @@ describe("nextSaveState", () => {
     expect(nextSaveState("armed", "promote-failed")).toBe("armed");
   });
 
-  it("reaches saved only by an actual promote", () => {
+  it("reaches saved only by an actual promote — from every state, with no exceptions", () => {
+    // The `saved` row is no longer skipped, and it no longer needs to be: the
+    // one cell that used to be an exception (`saved` x `promote-failed`) now
+    // re-arms, so the rule holds across the whole table. The previous version
+    // of this test skipped the row that contained its own counterexample.
     for (const state of SAVE_STATES) {
-      if (state === "saved") continue;
-
       for (const event of SAVE_EVENTS) {
         if (event === "promoted") continue;
 
         expect(nextSaveState(state, event)).not.toBe("saved");
       }
     }
+  });
+
+  it("re-arms a failed promote even from saved", () => {
+    // The button does not say "saved once", it says "saved". A write that just
+    // failed makes that false, however many succeeded before it.
+    expect(nextSaveState("saved", "promote-failed")).toBe("armed");
   });
 
   it("moves armed to saved on a successful promote", () => {
@@ -307,13 +377,36 @@ describe("nextSaveState", () => {
     expect(nextSaveState("saved", "opened")).toBe("armed");
   });
 
-  it("leaves the button alone when the opened record is dropped", () => {
-    // `cleared-open` moves the id, not the state. The merchant on screen is
-    // still there and still unsaved, so the button must keep claiming what it
-    // claimed a moment ago.
+  it("leaves the button alone when the opened record is dropped — unless it was saved", () => {
+    // `cleared-open` moves the id, not the state, for every state but one. The
+    // merchant on screen is still there and still unsaved, so the button keeps
+    // claiming what it claimed a moment ago.
     for (const state of SAVE_STATES) {
+      if (state === "saved") continue;
       expect(nextSaveState(state, "cleared-open")).toBe(state);
     }
+
+    // `saved` is the exception, and it is the whole point of the event. It
+    // means "the record I wrote to is in the library"; once that record is
+    // gone the claim is false. Staying `saved` left the button reading
+    // "Zapisano" — and disabled — over a merchant nothing holds, with no way
+    // back short of a reload.
+    expect(nextSaveState("saved", "cleared-open")).toBe("armed");
+  });
+
+  it("answers unavailable for a value that is not in the contract at all", () => {
+    // The casts are the point: this is the shape a caller who broke the
+    // contract produces — a typo, or a value that reached here from JSON. The
+    // old lookup returned `undefined` typed as `SaveState`, and the *next*
+    // call indexed into it and threw inside a `setSession` updater, blanking
+    // the page. It must answer, and it must answer with the state that offers
+    // no press.
+    expect(nextSaveState("armed", "promotd" as SaveEvent)).toBe("unavailable");
+    expect(nextSaveState("nonsense" as SaveState, "generated")).toBe("unavailable");
+
+    // And the answer is itself a valid state, so a second call cannot throw.
+    const once = nextSaveState("armed", "promotd" as SaveEvent);
+    expect(() => nextSaveState(once, "generated")).not.toThrow();
   });
 
   it("stands persistence down from any state", () => {
@@ -411,8 +504,11 @@ describe("nextSaveSession", () => {
       everyEvent.map((event) => nextSaveSession({ state, openedSavedId: null }, event)),
     );
 
-    // The count is asserted, not just the membership: a reducer with a hole
-    // would produce `undefined` and still satisfy a loop that never checks it ran.
+    // The membership check is what does the work: a reducer with a hole yields
+    // `undefined`, which is not in `SAVE_STATES`. The length is *not* an
+    // independent guard — `flatMap` over the same two arrays makes it true by
+    // construction, so it cannot fail under any mutation. It stays only to
+    // catch a future refactor that stops iterating both lists.
     expect(results).toHaveLength(SAVE_STATES.length * SAVE_EVENTS.length);
     for (const result of results) {
       expect(SAVE_STATES).toContain(result.state);

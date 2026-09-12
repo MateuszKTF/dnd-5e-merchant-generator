@@ -107,9 +107,19 @@ const RECENT_WEIGHT = 0.15;
 export interface GenerateOptions {
   /** Item ids from the previous draw for this shop; biased against, never excluded. */
   readonly recentIds?: readonly string[];
-  /** Injectable for deterministic tests. Defaults to `Math.random`. */
+  /**
+   * Injectable for deterministic tests. Defaults to `Math.random`.
+   *
+   * Must yield `[0, 1)` — half-open, as `Math.random` is. A generator that can
+   * return exactly 1 lands one past the top of every band it drives.
+   */
   readonly rng?: () => number;
-  /** Injectable pools, for exercising the spill path against shallow tiers. */
+  /**
+   * Injectable pools, for exercising the spill path against shallow tiers.
+   *
+   * @internal Test seam only. Production callers pass nothing and get
+   * `ITEM_POOLS`; nothing in `src/components/` should ever set this.
+   */
   readonly pools?: Record<CategoryId, readonly CatalogItem[]>;
 }
 
@@ -120,8 +130,16 @@ export interface GenerateOptions {
  */
 export function generateAssortment(category: CategoryId, wealth: Wealth, opts: GenerateOptions = {}): AssortmentRow[] {
   const { recentIds = [], rng = Math.random, pools = ITEM_POOLS } = opts;
-  const config = WEALTH_CONFIG[wealth];
-  const pool = pools[category];
+  // Typed as optional on purpose. The ids arrive typed, but they also
+  // round-trip through `JSON.parse` of `localStorage`, so a stale document can
+  // carry a retired one and the lookup misses. Fail branded — the island
+  // discriminates on `AssortmentPoolError` to choose its message.
+  const config = WEALTH_CONFIG[wealth] as (typeof WEALTH_CONFIG)[Wealth] | undefined;
+  const pool = pools[category] as readonly CatalogItem[] | undefined;
+
+  if (config === undefined || pool === undefined) {
+    throw new AssortmentPoolError(`Unknown shop: category "${category}" at wealth "${wealth}".`);
+  }
 
   const size = randomInt(config.size[0], config.size[1], rng);
   if (pool.length < size) {
@@ -168,9 +186,6 @@ function allocateQuotas(size: number, mix: Record<Rarity, number>): Record<Rarit
   if (residual !== 0) {
     const largest = eligible.reduce((a, b) => (mix[a] >= mix[b] ? a : b));
     quotas[largest] += residual;
-    // A negative residual on a small quota could go below zero; clamp and
-    // push the difference back onto the largest share.
-    if (quotas[largest] < 0) quotas[largest] = 0;
   }
 
   return quotas;
@@ -240,7 +255,19 @@ function takeWeighted(
   recent: ReadonlySet<string>,
   rng: () => number,
 ): number {
-  const available = candidates.filter((item) => !picked.includes(item));
+  // Keyed by id, not object identity: FR-004 must not depend on the generated
+  // catalog never holding two objects for the same item. Filtering by reference
+  // would let a duplicated id through, and corrections key off `itemId`, so it
+  // would leak between rows with no visible symptom. Twins within this tier
+  // collapse here too, not just items already taken by an earlier one.
+  const seen = new Set(picked.map((item) => item.id));
+  const available: CatalogItem[] = [];
+  for (const item of candidates) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    available.push(item);
+  }
+
   let taken = 0;
 
   while (taken < count && available.length > 0) {
@@ -263,7 +290,13 @@ function takeWeighted(
   return taken;
 }
 
-/** Inclusive on both ends. */
+/**
+ * Inclusive on both ends.
+ *
+ * Clamped because an injected `rng` returning exactly 1 would otherwise land
+ * one past `max` — which quietly breaks a size band, a quantity band, and the
+ * "exactly one of any rare item" invariant all at once.
+ */
 function randomInt(min: number, max: number, rng: () => number): number {
-  return min + Math.floor(rng() * (max - min + 1));
+  return Math.min(max, min + Math.floor(rng() * (max - min + 1)));
 }

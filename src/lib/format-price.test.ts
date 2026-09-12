@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { formatPrice, partsToGp, priceParts, type PriceUnit } from "./format-price";
+import {
+  formatPrice,
+  isRenderablePrice,
+  partsToGp,
+  priceParts,
+  UNRENDERABLE_PRICE,
+  type PriceUnit,
+} from "./format-price";
 
 /**
  * The catalog's real span, plus the value that motivated the 1 cp floor:
@@ -81,7 +88,23 @@ describe("formatPrice", () => {
   });
 
   it("separates thousands so a 21000 gp item stays legible", () => {
-    // pl-PL groups with a narrow no-break space, so the digits must not run together.
+    // pl-PL groups thousands, so the digits must not run together.
     expect(formatPrice(21000)).not.toContain("21000");
+  });
+
+  it("refuses to launder a wrong price into a plausible cheap one", () => {
+    // Clamping these down to the 1 cp floor would show a definite, believable
+    // price where the truth is "wrong" or "unbounded".
+    for (const gp of [-5, -0.01, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(formatPrice(gp)).toBe(UNRENDERABLE_PRICE);
+      expect(isRenderablePrice(gp)).toBe(false);
+    }
+  });
+
+  it("still renders every real catalog price", () => {
+    for (const gp of BOUNDARIES) {
+      expect(isRenderablePrice(gp)).toBe(true);
+      expect(formatPrice(gp)).not.toBe(UNRENDERABLE_PRICE);
+    }
   });
 });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { autoName, newMerchantId, type Merchant, type StoredRow } from "./merchant";
 import {
@@ -14,6 +14,7 @@ import {
   SCHEMA_VERSION,
   STORAGE_KEY,
   type StorageDocument,
+  type StorageLike,
 } from "./merchant-storage";
 import { createStorageFake, type StorageFake } from "./storage-fake.test-helper";
 
@@ -183,12 +184,32 @@ describe("listSaved", () => {
     expect(listSaved(store)).toEqual({ status: "ok", merchants: [] });
   });
 
+  it("still lists the merchants when the store refuses writes", () => {
+    // The other half of the `read-only` fix. `listSaved` used to pass the
+    // read result straight through, so the merchants arrived in a field called
+    // `doc` and any caller reading `.merchants` saw an empty library — on a
+    // store whose bytes were perfectly readable.
+    putTransient(makeMerchant({ name: "Zapisany" }), store);
+    promoteTransient(store);
+    const bytes = storedBytes(store) ?? "";
+
+    resetReadOnlyLatch();
+    const refusing = createStorageFake({ seed: { [STORAGE_KEY]: bytes }, throwOn: true });
+
+    const list = listSaved(refusing);
+    expect(list.status).toBe("ok");
+    expect(list.status === "ok" && list.merchants.map((m) => m.name)).toEqual(["Zapisany"]);
+  });
+
   it("never contains the transient record", () => {
-    const merchant = makeMerchant();
-    putTransient(merchant, store);
+    // Against a NON-empty saved list, so the assertion cannot pass by way of a
+    // `listSaved` that simply always returns nothing.
+    putTransient(makeMerchant({ name: "Zapisany" }), store);
+    promoteTransient(store);
+    putTransient(makeMerchant({ name: "Tylko na ekranie" }), store);
 
     const list = listSaved(store);
-    expect(list.status === "ok" && list.merchants).toEqual([]);
+    expect(list.status === "ok" && list.merchants.map((m) => m.name)).toEqual(["Zapisany"]);
   });
 });
 
@@ -208,10 +229,13 @@ describe("renameMerchant", () => {
     putTransient(makeMerchant(), store);
     promoteTransient(store);
 
-    expect(renameMerchant("nie-ma-takiego", "Cokolwiek", store)).toEqual({ status: "not-found" });
+    // Raw bytes, matching the `updateSavedMerchant` and `deleteMerchant`
+    // counterparts: a length check would miss a rename that hit the wrong
+    // record, which is the failure actually worth guarding against.
+    const before = storedBytes(store);
 
-    const list = listSaved(store);
-    expect(list.status === "ok" && list.merchants.length).toBe(1);
+    expect(renameMerchant("nie-ma-takiego", "Cokolwiek", store)).toEqual({ status: "not-found" });
+    expect(storedBytes(store)).toBe(before);
   });
 });
 
@@ -249,11 +273,16 @@ describe("updateSavedMerchant", () => {
     if (first.status !== "ok" || second.status !== "ok") throw new Error("promote failed");
 
     const neighbourBefore = JSON.stringify(second.merchant);
-    updateSavedMerchant(first.merchant.id, { rows: NEW_ROWS, corrections: {} }, store);
+    expect(updateSavedMerchant(first.merchant.id, { rows: NEW_ROWS, corrections: {} }, store)).toEqual({
+      status: "ok",
+    });
 
     const list = listSaved(store);
     if (list.status !== "ok") throw new Error("list failed");
     expect(JSON.stringify(list.merchants[1])).toBe(neighbourBefore);
+    // The positive half, so an `updateSavedMerchant` that did nothing at all
+    // cannot pass this test on the neighbour assertion alone.
+    expect(list.merchants[0].rows).toEqual(NEW_ROWS);
   });
 
   it("reports not-found for an unknown id without appending", () => {
@@ -307,13 +336,43 @@ describe("deleteMerchant", () => {
 });
 
 describe("storage unavailable", () => {
-  it("reads as unavailable when the store refuses writes — Safari private mode", () => {
+  it("reads an EMPTY write-refusing store as unavailable — nothing to show either way", () => {
+    // The seeding is the whole distinction, and the title now says so: with a
+    // document present this same store reads `read-only` and hands the
+    // merchants over (see the next test). Empty, there is nothing to show, so
+    // the write refusal is the only news worth reporting.
+    //
     // The store exists and reads fine; only `setItem` throws. Feature detection
     // would call this available and then lose the GM's data, which is why the
     // module probes by actually writing.
     const disabled = createStorageFake({ throwOn: true });
 
     expect(readDocument(disabled)).toEqual({ status: "unavailable" });
+  });
+
+  it("still hands over the merchants when only writes are refused", () => {
+    // Safari's private mode: `localStorage` reads fine and `setItem` throws.
+    // The GM's library is right there, so hiding it behind a "storage is off"
+    // banner would lose merchants for no reason. The document comes back; the
+    // status says writes are refused.
+    const seeded = createStorageFake();
+    putTransient(makeMerchant({ name: "Zapisany wcześniej" }), seeded);
+    promoteTransient(seeded);
+    const bytes = storedBytes(seeded) ?? "";
+
+    resetReadOnlyLatch();
+    const refusing = createStorageFake({ seed: { [STORAGE_KEY]: bytes }, throwOn: true });
+
+    const read = readDocument(refusing);
+    expect(read.status).toBe("read-only");
+    expect(read.status === "read-only" && read.doc.saved.map((m) => m.name)).toEqual(["Zapisany wcześniej"]);
+
+    // And the latch is engaged, so a later write says so instead of appearing
+    // to succeed. The second store is what proves it: on `refusing` the answer
+    // could come from the read mapping alone, while a clean store has nothing
+    // to map and can only be refused by the latch.
+    expect(putTransient(makeMerchant(), refusing)).toEqual({ status: "read-only" });
+    expect(putTransient(makeMerchant(), createStorageFake())).toEqual({ status: "read-only" });
   });
 
   it("writes as unavailable rather than throwing", () => {
@@ -365,6 +424,40 @@ describe("quota exhausted", () => {
 
     expect(putTransient(makeMerchant({ name: "Nowy" }), full)).toEqual({ status: "quota-exceeded" });
     expect(storedBytes(full)).toBe(before);
+  });
+
+  it("recognises a full store however the engine spells the failure", () => {
+    // The plan called for WebKit's and Firefox's legacy names, and nothing
+    // exercised them: while the check was gated on `instanceof DOMException`,
+    // reducing the set to the modern name alone changed no test.
+    //
+    // Getting this wrong is not a wrong message, it is a dead end: an
+    // unrecognised quota failure is classified `unavailable`, which LATCHES,
+    // and `deleteMerchant` — the only remedy for a full store — is then
+    // refused. `"full"` deliberately does not latch.
+    function storeThrowing(error: unknown): StorageLike {
+      return {
+        getItem: () => null,
+        setItem: () => {
+          throw error;
+        },
+        removeItem: () => undefined,
+      };
+    }
+
+    const legacyWebKit = new DOMException("full", "QUOTA_EXCEEDED_ERR");
+    const legacyFirefox = new DOMException("full", "NS_ERROR_DOM_QUOTA_REACHED");
+    // Not a DOMException at all — the shape `instanceof` used to miss.
+    const plain = Object.assign(new Error("full"), { name: "QuotaExceededError" });
+    // Only a numeric code, which is all some older engines give.
+    const codeOnly = Object.assign(new Error("full"), { name: "Weird", code: 22 });
+
+    for (const error of [legacyWebKit, legacyFirefox, plain, codeOnly]) {
+      resetReadOnlyLatch();
+      expect(
+        writeDocument({ schemaVersion: SCHEMA_VERSION, transient: null, saved: [] }, storeThrowing(error)),
+      ).toEqual({ status: "quota-exceeded" });
+    }
   });
 
   it("distinguishes a full store from a disabled one", () => {
@@ -436,6 +529,12 @@ describe("corrupt payload", () => {
     expect(promoteTransient(full)).toEqual({ status: "read-only" });
     expect(deleteMerchant("x", full)).toEqual({ status: "read-only" });
     expect(storedBytes(full)).toBe(GARBAGE);
+
+    // Against a SECOND, healthy store — the only assertion that distinguishes
+    // the latch from the read-status mapping. On `full`, `read-only` is what
+    // the unreadable read maps to whether or not the latch was ever set; a
+    // clean store has nothing to map, so only the latch can refuse it.
+    expect(putTransient(makeMerchant(), createStorageFake())).toEqual({ status: "read-only" });
   });
 
   it("never reclaims a quarantined payload on its own", () => {
@@ -447,6 +546,100 @@ describe("corrupt payload", () => {
     readDocument(corrupt);
 
     expect(corruptKeys(corrupt)).toHaveLength(1);
+  });
+
+  it("gives each quarantined payload its own key, even within one millisecond", () => {
+    // `toISOString()` is millisecond-resolution and the clock is not monotonic,
+    // so the timestamp alone let a second quarantine overwrite the first. That
+    // first copy can be the only surviving copy of the GM's library.
+    //
+    // **The clock is frozen deliberately.** Left to run, two reads usually land
+    // in different milliseconds and the test passes whether or not the key is
+    // unique — a guard that only fires when the machine happens to be slow is
+    // not a guard. Freezing forces the collision this exists to rule out.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-12T10:00:00.000Z"));
+
+    try {
+      const corrupt = createStorageFake();
+
+      corrupt.entries.set(STORAGE_KEY, "{{{pierwszy");
+      expect(readDocument(corrupt).status).toBe("quarantined");
+
+      corrupt.entries.set(STORAGE_KEY, "{{{drugi");
+      expect(readDocument(corrupt).status).toBe("quarantined");
+
+      const keys = corruptKeys(corrupt);
+      expect(keys).toHaveLength(2);
+
+      // Both payloads survive, not just the later one.
+      const parked = keys.map((key) => corrupt.entries.get(key)).sort();
+      expect(parked).toEqual(["{{{drugi", "{{{pierwszy"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports the latch to readers, not just to writers", () => {
+    // The latch outlives the store that set it. A page latched by a
+    // `future-version` read used to keep answering `ok` on a healthy store
+    // while every write was refused with a status that raises no notice — a
+    // correction disappearing in silence, which is the guardrail verbatim.
+    // Seeded BEFORE the latch engages — afterwards every write is refused, so a
+    // store filled later would be empty and the read would answer `unavailable`
+    // (nothing to show) rather than `read-only` (here it is, but frozen).
+    const healthy = createStorageFake();
+    putTransient(makeMerchant({ name: "Zapisany" }), healthy);
+
+    const future = createStorageFake({
+      seed: {
+        [STORAGE_KEY]: JSON.stringify({ schemaVersion: SCHEMA_VERSION + 1, transient: null, saved: [] }),
+      },
+    });
+    expect(readDocument(future).status).toBe("future-version");
+
+    const read = readDocument(healthy);
+    expect(read.status).toBe("read-only");
+    // And the merchants still come back — a latched page shows what it has.
+    expect(read.status === "read-only" && read.doc.transient?.name).toBe("Zapisany");
+  });
+
+  it("names the latch as the reason a mutation failed, not `not-found`", () => {
+    // `loadForWrite` only translated the read status, so a latched page whose
+    // read came back `empty` fell through to the id check and answered
+    // `not-found` — which also maps to no notice. The GM was told nothing twice.
+    const future = createStorageFake({
+      seed: {
+        [STORAGE_KEY]: JSON.stringify({ schemaVersion: SCHEMA_VERSION + 1, transient: null, saved: [] }),
+      },
+    });
+    expect(readDocument(future).status).toBe("future-version");
+
+    const healthy = createStorageFake();
+
+    expect(promoteTransient(healthy)).toEqual({ status: "read-only" });
+    expect(deleteMerchant("cokolwiek", healthy)).toEqual({ status: "read-only" });
+    expect(renameMerchant("cokolwiek", "Nowa", healthy)).toEqual({ status: "read-only" });
+  });
+
+  it("does not re-copy the payload when the reset write failed", () => {
+    // The nastiest combination: bytes that cannot be parsed, in a store too
+    // full to overwrite them. The copy aside succeeds, the reset does not, so
+    // the corrupt bytes stay under the main key and every later read re-enters
+    // quarantine. Without the latch check that is one more full copy per read,
+    // growing a store that already reported quota-exceeded — in a module that
+    // never reclaims anything.
+    const corrupt = createStorageFake({ quotaExceededOn: [STORAGE_KEY] });
+    corrupt.entries.set(STORAGE_KEY, GARBAGE);
+
+    for (let i = 0; i < 5; i += 1) {
+      expect(readDocument(corrupt).status).toBe("unreadable");
+    }
+
+    expect(corruptKeys(corrupt)).toHaveLength(1);
+    // And the original bytes are still recoverable by hand, which is the whole
+    // point of refusing to touch them.
+    expect(corrupt.entries.get(STORAGE_KEY)).toBe(GARBAGE);
   });
 });
 
@@ -461,6 +654,115 @@ describe("newer schema version", () => {
 
     return createStorageFake({ seed: { [STORAGE_KEY]: JSON.stringify(doc) } });
   }
+
+  it("drops junk inside `saved` without handing it out typed", () => {
+    // Reachable by a hand edit, a newer build, or a truncated document. Without
+    // the element filter, `listSaved` returned [null, 42] typed as Merchant[]
+    // and the next rename threw a TypeError reading `.id` off null — out of a
+    // module that promises it never throws.
+    const store = createStorageFake({
+      seed: { [STORAGE_KEY]: JSON.stringify({ schemaVersion: SCHEMA_VERSION, transient: null, saved: [null, 42] }) },
+    });
+
+    const read = readDocument(store);
+    expect(read.status).toBe("ok");
+    expect(read.status === "ok" && read.dropped).toBe(2);
+    expect(() => renameMerchant("whatever", "Nowa nazwa", store)).not.toThrow();
+    expect(listSaved(store)).toEqual({ status: "ok", merchants: [] });
+  });
+
+  it("keeps the readable merchants when only one record is damaged", () => {
+    // The regression this split exists to prevent: element-level damage must
+    // not trigger the document-level response. A GM with one truncated record
+    // still has the rest, and quarantining would have emptied the main key.
+    const good = makeMerchant({ name: "Dobry kowal" });
+    const damaged = { ...makeMerchant(), rows: [{ itemId: "x", name: "X", rarity: "pospolite", quantity: 1 }] };
+    const store = createStorageFake({
+      seed: {
+        [STORAGE_KEY]: JSON.stringify({ schemaVersion: SCHEMA_VERSION, transient: null, saved: [good, damaged] }),
+      },
+    });
+
+    const read = readDocument(store);
+    expect(read.status).toBe("ok");
+    expect(read.status === "ok" && read.dropped).toBe(1);
+
+    const list = listSaved(store);
+    expect(list.status === "ok" && list.merchants.map((m) => m.name)).toEqual(["Dobry kowal"]);
+    // Nothing was quarantined and the main key was not emptied.
+    expect(corruptKeys(store)).toHaveLength(0);
+  });
+
+  it("reports the drop on a write-refusing store too, not just a writable one", () => {
+    // The branch the type checker caught: `read-only` carries a document and
+    // salvages exactly like `ok`, so dropping the count here would make the
+    // loss silent for precisely the GM who cannot re-save to recover from it.
+    const good = makeMerchant({ name: "Dobry kowal" });
+    const damaged = { ...makeMerchant(), rows: [{ itemId: "x", name: "X", rarity: "pospolite", quantity: 1 }] };
+    const bytes = JSON.stringify({ schemaVersion: SCHEMA_VERSION, transient: null, saved: [good, damaged] });
+
+    resetReadOnlyLatch();
+    const refusing = createStorageFake({ seed: { [STORAGE_KEY]: bytes }, throwOn: true });
+
+    const read = readDocument(refusing);
+    expect(read.status).toBe("read-only");
+    expect(read.status === "read-only" && read.dropped).toBe(1);
+    expect(read.status === "read-only" && read.doc.saved.map((m) => m.name)).toEqual(["Dobry kowal"]);
+  });
+
+  it("keeps the saved library when only the transient slot is damaged", () => {
+    // The throwaway record must never cost the durable ones.
+    const good = makeMerchant({ name: "Zapisany" });
+    const store = createStorageFake({
+      seed: {
+        [STORAGE_KEY]: JSON.stringify({
+          schemaVersion: SCHEMA_VERSION,
+          transient: { id: "bez-reszty" },
+          saved: [good],
+        }),
+      },
+    });
+
+    const read = readDocument(store);
+    expect(read.status === "ok" && read.doc.transient).toBeNull();
+    expect(read.status === "ok" && read.doc.saved.map((m) => m.name)).toEqual(["Zapisany"]);
+    expect(corruptKeys(store)).toHaveLength(0);
+  });
+
+  it("refuses to write an older document rather than relabelling it", () => {
+    // No live case at v1 — nothing exists below it. The test is here because
+    // `save` stamps SCHEMA_VERSION onto whatever it writes, so the day v2 ships
+    // a fall-through would mark a v1 document as v2 without migrating it,
+    // silently and permanently. Failing closed is the only behaviour that
+    // cannot corrupt by omission.
+    const older = JSON.stringify({ schemaVersion: SCHEMA_VERSION - 1, transient: null, saved: [] });
+    const store = createStorageFake({ seed: { [STORAGE_KEY]: older } });
+
+    expect(readDocument(store)).toEqual({ status: "needs-migration", found: SCHEMA_VERSION - 1 });
+    expect(store.getItem(STORAGE_KEY)).toBe(older);
+
+    // And the latch holds, so nothing downstream can write over it either.
+    expect(putTransient(makeMerchant(), store)).toEqual({ status: "read-only" });
+    expect(store.getItem(STORAGE_KEY)).toBe(older);
+
+    // Second store, as above: on `store` the answer could come from the read
+    // mapping alone. A clean store has nothing to map, so this is the latch.
+    expect(putTransient(makeMerchant(), createStorageFake())).toEqual({ status: "read-only" });
+  });
+
+  it("protects a v2 document that RESTRUCTURED the fields, not just added one", () => {
+    // The fixture above keeps v1's layout, so it passes a shape check by
+    // accident. Restructuring is the usual reason to bump a version at all,
+    // and this is the case that must not be mistaken for corruption: read the
+    // version before the shape, or a rollback quarantines the newer document
+    // and overwrites the main key with an empty one.
+    const reshaped = JSON.stringify({ schemaVersion: SCHEMA_VERSION + 1, merchants: [{ id: "a" }] });
+    const store = createStorageFake({ seed: { [STORAGE_KEY]: reshaped } });
+
+    expect(readDocument(store)).toEqual({ status: "future-version", found: SCHEMA_VERSION + 1 });
+    expect(store.getItem(STORAGE_KEY)).toBe(reshaped);
+    expect([...store.entries.keys()]).toEqual([STORAGE_KEY]);
+  });
 
   it("reports the version it found and leaves the bytes strictly untouched", () => {
     const future = futureStore();
