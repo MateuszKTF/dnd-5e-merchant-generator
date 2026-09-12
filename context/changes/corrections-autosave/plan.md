@@ -357,13 +357,13 @@ jawnego zapisu z S-04. Oba są opisane w `change.md` z uzasadnieniem, żeby nie 
 
 #### Manual
 
-- [ ] 1.6 Korekta u otwartego kupca trzyma się go bez klikania
-- [ ] 1.7 Przy otwartym kupcu nie ma przycisku zapisu
-- [ ] 1.8 Przeładowanie przy otwartym kupcu zachowuje kupca i brak przycisku
-- [ ] 1.9 Stwórz, Zapisz, kolejna korekta trafia do tego samego wpisu
-- [ ] 1.10 Stwórz po otwarciu: przycisk wraca, Zapisz dodaje nowego, poprzedni nietknięty
-- [ ] 1.11 Zablokowana pamięć: baner jest, wartość z ekranu zostaje
-- [ ] 1.12 Duplikatu nie da się zrobić żadną ścieżką
+- [x] 1.6 Korekta u otwartego kupca trzyma się go bez klikania
+- [x] 1.7 Przy otwartym kupcu nie ma przycisku zapisu
+- [x] 1.8 Przeładowanie przy otwartym kupcu zachowuje kupca i brak przycisku
+- [x] 1.9 Stwórz, Zapisz, kolejna korekta trafia do tego samego wpisu
+- [x] 1.10 Stwórz po otwarciu: przycisk wraca, Zapisz dodaje nowego, poprzedni nietknięty
+- [x] 1.11 Zablokowana pamięć: baner jest, wartość z ekranu zostaje
+- [x] 1.12 Duplikatu nie da się zrobić żadną ścieżką
 
 ### Phase 2: Porządki w interfejsie
 
@@ -376,10 +376,10 @@ jawnego zapisu z S-04. Oba są opisane w `change.md` z uzasadnieniem, żeby nie 
 
 #### Manual
 
-- [ ] 2.5 Poprawiona komórka niczym się nie wyróżnia
-- [ ] 2.6 Otwarcie innego kupca przy otwartym rekordzie: bez dialogu
-- [ ] 2.7 Stwórz nad poprawionym kupcem spoza biblioteki: dialog jest
-- [ ] 2.8 Usunięcie dalej zawsze pyta
-- [ ] 2.9 Edycja i F5 bez klikania poza pole: wartość przeżywa
-- [ ] 2.10 Edycja i przełączenie karty: wartość przeżywa
-- [ ] 2.11 Wszystko wygodne na 360 px
+- [x] 2.5 Poprawiona komórka niczym się nie wyróżnia
+- [x] 2.6 Otwarcie innego kupca przy otwartym rekordzie: bez dialogu
+- [x] 2.7 Stwórz nad poprawionym kupcem spoza biblioteki: dialog jest
+- [x] 2.8 Usunięcie dalej zawsze pyta
+- [x] 2.9 Edycja i F5 bez klikania poza pole: wartość przeżywa
+- [x] 2.10 Edycja i przełączenie karty: wartość przeżywa
+- [x] 2.11 Wszystko wygodne na 360 px

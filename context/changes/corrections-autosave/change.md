@@ -1,7 +1,7 @@
 ---
 change_id: corrections-autosave
 title: Korekty zapisują się same, bez tworzenia duplikatu
-status: implementing
+status: implemented
 created: 2026-09-12
 updated: 2026-09-12
 archived_at: null
