@@ -28,19 +28,38 @@ import { formatWallClock, type Merchant } from "./merchant";
 export const MAX_NAME_LENGTH = 60;
 
 /**
- * Zero-width characters that carry no meaning of their own.
+ * Format characters stripped from a name before it is stored — every one of
+ * them except the joiner.
  *
- * They survive `\s` — which matches neither U+200B nor U+200D — so without this
- * a name pasted as nothing but invisibles passes the blank guard, reaches
- * `renameMerchant`, and leaves a row that renders with no name at all across
- * every reload. That is the loss the blank guard exists to prevent, arriving by
- * a route `trim()` cannot see.
+ * They survive `\s`, which matches none of them, so without this a name pasted
+ * as nothing but invisibles passes the blank guard, reaches `renameMerchant`,
+ * and leaves a row that renders with no name at all across every reload. That
+ * is the loss the blank guard exists to prevent, arriving by a route `trim()`
+ * cannot see.
+ *
+ * **The category, not a list — and that distinction is the whole fix.** This
+ * used to enumerate U+200B, U+200C and U+FEFF, which is a guess about which
+ * invisibles a GM will paste, and the guess was wrong in a way nothing caught.
+ * U+00AD walked straight through: Word, PDFs and hyphenating browsers emit it,
+ * which is the paste-from-session-notes route this rule exists for. Worse, the
+ * *search* side of this same file has asserted that exact character since S-05
+ * — see the `normalizeForSearch` soft-hyphen test in `merchant-library.test.ts`
+ * — so one half of the file knew about it while the half twenty lines up did
+ * not. A name made only of soft hyphens was storable, rendered blank, and was
+ * unfindable by any query, because {@link normalizeForSearch} reduces it to the
+ * empty string. Same category on both sides now, so the two cannot drift again.
  *
  * U+200D is deliberately **not** in this set: it joins, so it is load-bearing
  * inside an emoji sequence and has to survive inside a real name. A string of
- * nothing but joiners is still blank, which is what `BLANK_NAME` answers.
+ * nothing but joiners is still blank, which is what `BLANK_NAME` answers. The
+ * lookahead is what carves it out — a bare `\p{Cf}` would break a family emoji
+ * into separate people inside a name the GM chose.
+ *
+ * **Deliberately narrower than {@link FORMAT_CHARS}** by exactly that one
+ * character. There the result is discarded after a comparison, so dropping the
+ * joiner costs nothing; here the result is what gets written down.
  */
-const INVISIBLE_NAME_CHARS = /[\u200B\u200C\uFEFF]/gu;
+const NAME_FORMAT_CHARS = /(?!\u200D)\p{Cf}/gu;
 
 /**
  * Everything Unicode classifies as a format character, removed before a search
@@ -58,7 +77,7 @@ const INVISIBLE_NAME_CHARS = /[\u200B\u200C\uFEFF]/gu;
  * a GM will paste and this is the actual category: it covers U+00AD, U+200B-
  * U+200F, U+2060, U+2066-U+2069 and U+FEFF in one concept.
  *
- * **Deliberately wider than {@link INVISIBLE_NAME_CHARS}**, which keeps U+200D
+ * **Deliberately wider than {@link NAME_FORMAT_CHARS}**, which keeps U+200D
  * because there it is load-bearing — it holds an emoji sequence together in a
  * name the GM chose. Here the result is discarded after the comparison, so
  * keeping it would only make a name with a family emoji unfindable by its plain
@@ -141,7 +160,7 @@ function toGraphemes(value: string): string[] {
  * notes may arrive decomposed.
  */
 export function normalizeName(raw: string): string | null {
-  const collapsed = raw.replace(INVISIBLE_NAME_CHARS, "").replace(/\s+/gu, " ").trim();
+  const collapsed = raw.replace(NAME_FORMAT_CHARS, "").replace(/\s+/gu, " ").trim();
   if (BLANK_NAME.test(collapsed)) {
     return null;
   }

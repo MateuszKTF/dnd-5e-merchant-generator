@@ -625,8 +625,17 @@ describe("openedSavedIdFor", () => {
     // The state the promote path has to repair. `promoteTransient` appends the
     // copy under a FRESH id and leaves the transient on the old one, so nothing
     // links them — which is why `addMerchant` rewrites the transient afterwards.
-    // If this ever starts returning the id, promote stopped minting and the
-    // whole inference underneath this function is unsound.
+    //
+    // **This test cannot see whether promote still mints**, and used to claim it
+    // could. Both merchants below are literals chosen here, so it never executes
+    // a line of `merchant-storage.ts`: it would have stayed green on a promote
+    // that reused the transient's id, while `openedSavedIdFor` silently became
+    // unsound. What it does pin is this function's own rule — two different ids
+    // do not link — which is worth a test on its own.
+    //
+    // The cross-module invariant is pinned where the storage fake and the
+    // read-only latch reset already live: see "promoteTransient ↔
+    // openedSavedIdFor" in `merchant-storage.test.ts`.
     const transient = merchant({ id: "m-old" });
     const promotedCopy = merchant({ id: "m-new", savedAt: "2026-09-12T10:00:00.000Z" });
 

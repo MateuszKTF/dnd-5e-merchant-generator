@@ -73,9 +73,36 @@ describe("normalizeName", () => {
     // `\s` matches neither U+200B nor U+200D, so these walk straight past
     // `trim()`. Without the strip they reach `renameMerchant` and leave a row
     // that renders with no name at all, across every reload.
-    for (const invisible of ["\u200B", "\u200B\u200B\u200B", "\u200C", "\u200D\u200D", "\uFEFF", " \u200B \u200D "]) {
+    //
+    // The second row is the gap this list used to have. Enumerating three
+    // characters is a guess about which invisibles a GM pastes, and U+00AD --
+    // the one Word, PDFs and every hyphenating browser emit -- was not in it.
+    // The search side of this file has asserted that character since S-05.
+    for (const invisible of [
+      "\u200B",
+      "\u200B\u200B\u200B",
+      "\u200C",
+      "\u200D\u200D",
+      "\uFEFF",
+      " \u200B \u200D ",
+      "\u00AD",
+      "\u00AD\u00AD",
+      "\u2060",
+      "\u200E",
+      "\u200F",
+      "\u2066",
+      "\u2069",
+    ]) {
       expect(normalizeName(invisible)).toBeNull();
     }
+  });
+
+  it("strips an invisible from inside a name and keeps the rest", () => {
+    // The mirror of the normalizeForSearch soft-hyphen test further down this
+    // file. Both sides of the comparison have to agree on the same character,
+    // or a name stored with one is unfindable by a query typed without it.
+    expect(normalizeName("Ku\u00ADznia u Borysa")).toBe("Kuznia u Borysa");
+    expect(normalizeName("Ku\u200Bznia")).toBe("Kuznia");
   });
 
   it("keeps a zero-width joiner that is holding an emoji together", () => {

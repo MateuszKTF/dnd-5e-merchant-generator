@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { autoName, newMerchantId, type Merchant, type StoredRow } from "./merchant";
+import { openedSavedIdFor } from "./merchant-session";
 import {
   deleteMerchant,
   listSaved,
@@ -176,6 +177,42 @@ describe("promoteTransient", () => {
 
   it("reports not-found when there is nothing to save", () => {
     expect(promoteTransient(store)).toEqual({ status: "not-found" });
+  });
+});
+
+describe("promoteTransient ↔ openedSavedIdFor", () => {
+  // The one invariant in this layer that spans two modules and was held by a
+  // comment. `merchant-session.ts` infers which saved record the transient slot
+  // came from purely from the ids not matching, and says so out loud: the
+  // inference "is sound for exactly as long as promote keeps minting".
+  //
+  // `merchant-session.test.ts` claimed to guard that and could not — it built
+  // both merchants from literals it chose itself, so it never executed a line
+  // of `promoteTransient` and stayed green when promote stopped minting. This
+  // is the test that fails: it drives the inference from the real output.
+  //
+  // It lives here rather than beside `openedSavedIdFor` because this file
+  // already owns the storage fake and the `resetReadOnlyLatch` in `beforeEach`.
+  // Importing a latching function into `merchant-session.test.ts` would make
+  // that suite order-dependent for the first time — the exact hazard
+  // `resetReadOnlyLatch`'s own docblock exists to warn about.
+  it("leaves the promoted copy unlinked from the slot it was copied from", () => {
+    const merchant = makeMerchant();
+    putTransient(merchant, store);
+
+    expect(promoteTransient(store).status).toBe("ok");
+
+    const read = readDocument(store);
+    expect(read.status).toBe("ok");
+    if (read.status !== "ok") return;
+
+    // Guard against the vacuous pass, the way the aliasing test above does: if
+    // the record never reached `saved`, or the slot was emptied, the assertion
+    // below would hold for a reason that has nothing to do with minting.
+    expect(read.doc.saved).toHaveLength(1);
+    expect(read.doc.transient?.id).toBe(merchant.id);
+
+    expect(openedSavedIdFor(read.doc)).toBeNull();
   });
 });
 
