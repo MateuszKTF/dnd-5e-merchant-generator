@@ -4,8 +4,8 @@ import { CATEGORIES, type CategoryId } from "@/data/items";
 
 import {
   filterMerchants,
+  holdOrder,
   libraryRow,
-  matchesQuery,
   MAX_NAME_LENGTH,
   normalizeForSearch,
   normalizeName,
@@ -67,6 +67,24 @@ describe("normalizeName", () => {
     for (const blank of [" ", "   ", "\t", "\n", " \t\n "]) {
       expect(normalizeName(blank)).toBeNull();
     }
+  });
+
+  it("returns null for a name made only of zero-width characters", () => {
+    // `\s` matches neither U+200B nor U+200D, so these walk straight past
+    // `trim()`. Without the strip they reach `renameMerchant` and leave a row
+    // that renders with no name at all, across every reload.
+    for (const invisible of ["\u200B", "\u200B\u200B\u200B", "\u200C", "\u200D\u200D", "\uFEFF", " \u200B \u200D "]) {
+      expect(normalizeName(invisible)).toBeNull();
+    }
+  });
+
+  it("keeps a zero-width joiner that is holding an emoji together", () => {
+    // The joiner is load-bearing inside a sequence: stripping it unconditionally
+    // would turn one family into separate people inside a name the GM chose.
+    const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}";
+    const named = `Kuznia ${family}`;
+
+    expect(normalizeName(named)).toBe(named);
   });
 
   it("accepts a name another merchant already has", () => {
@@ -177,6 +195,18 @@ describe("sortForLibrary", () => {
     ]);
   });
 
+  it("buries a merchant whose savedAt key is absent, whatever order it arrives in", () => {
+    // The other half of the same hazard: `null` is the explicit shape, but a
+    // hand-edited or older document simply omits the key. Asserted from two
+    // input orders because the bug this replaces was an *inconsistent*
+    // comparator — it answered -1 both ways, so the result moved with the input.
+    const absent = { ...merchant({ id: "m-absent" }) };
+    delete (absent as { savedAt?: string | null }).savedAt;
+
+    expect(sortForLibrary([absent, older, newer]).map((entry) => entry.id)).toEqual(["m-newer", "m-older", "m-absent"]);
+    expect(sortForLibrary([newer, absent, older]).map((entry) => entry.id)).toEqual(["m-newer", "m-older", "m-absent"]);
+  });
+
   it("leaves the input array untouched", () => {
     // The argument is island state; sorting it in place would mutate React's
     // own value behind its back.
@@ -274,25 +304,51 @@ describe("normalizeForSearch", () => {
   });
 });
 
-describe("matchesQuery", () => {
-  const kowal = merchant({ name: "Kuźnia u Borysa", category: "kowal" });
-
-  it("matches on the name", () => {
-    expect(matchesQuery(kowal, "borysa", "Kowal")).toBe(true);
+describe("normalizeForSearch — zero-width", () => {
+  // \s matches neither U+200B nor U+200C. It does match U+FEFF and NBSP, which
+  // is exactly why this gap looked closed: the obvious probes pass.
+  it("strips zero-width characters that \\s does not match", () => {
+    expect(/\s/u.test("\u200B")).toBe(false);
+    expect(normalizeForSearch("Ku\u200Bznia")).toBe("kuznia");
+    expect(normalizeForSearch("Ku\u200Cznia")).toBe("kuznia");
+    // U+00AD is the realistic one for this product: Word, PDFs and hyphenating
+    // browsers all emit it on copy, which is the paste-from-notes route the
+    // rule exists for. \s does not match it either.
+    expect(/\s/u.test("\u00AD")).toBe(false);
+    expect(normalizeForSearch("Ku\u00ADznia")).toBe("kuznia");
   });
 
-  it("matches on the category label", () => {
-    // The renamed-merchant case: "Kuźnia u Borysa" contains no "kowal", so
-    // without the category arm FR-010 would blind FR-012.
-    expect(matchesQuery(kowal, "kowal", "Kowal")).toBe(true);
+  it("strips the joiner too, unlike the storage rule", () => {
+    // `normalizeName` keeps U+200D so an emoji sequence survives in a name the
+    // GM chose. Here the result is thrown away after the comparison, so keeping
+    // it would only make that name unfindable by its plain letters.
+    expect(normalizeForSearch("Kuznia \u{1F468}\u200D\u{1F469}")).toBe("kuznia 👨👩");
+  });
+});
+
+describe("filterMerchants — zero-width, both sides", () => {
+  it("finds a stored name carrying a zero-width space", () => {
+    // The name was saved before the rename path started stripping invisibles,
+    // or arrived by some other route. It must not be permanently unfindable.
+    const hidden = merchant({ id: "m-zwsp", name: "Ku\u200Bźnia u Borysa" });
+
+    expect(filterMerchants([hidden], "kuznia").map((entry) => entry.id)).toEqual(["m-zwsp"]);
   });
 
-  it("rejects a query matching neither", () => {
-    expect(matchesQuery(kowal, "alchemik", "Kowal")).toBe(false);
+  it("finds a clean name from a query carrying a zero-width space", () => {
+    // The half nothing else covers: `normalizeName` is never applied to the
+    // query. Google Docs, Notion and Discord all emit U+200B on copy.
+    const clean = merchant({ id: "m-clean", name: "Kuźnia u Borysa" });
+
+    expect(filterMerchants([clean], "kuz\u200Bnia").map((entry) => entry.id)).toEqual(["m-clean"]);
   });
 
-  it("treats an empty query as no filter at all", () => {
-    expect(matchesQuery(kowal, "", "Kowal")).toBe(true);
+  it("treats a query of nothing but zero-width as no filter at all", () => {
+    // Otherwise the panel says it has no match for a query that looks empty,
+    // over a fully populated library.
+    const all = [merchant({ id: "m-a" }), merchant({ id: "m-b" })];
+
+    expect(filterMerchants(all, "\u200B\u200C").map((entry) => entry.id)).toEqual(["m-a", "m-b"]);
   });
 });
 
@@ -335,7 +391,7 @@ describe("filterMerchants", () => {
     expect(filterMerchants(all, "luk").map((entry) => entry.id)).toEqual(["m-luk"]);
   });
 
-  it("finds a diacritic-free name from a diacritic-bearing query", () => {
+  it("normalizes the query, not just the stored name", () => {
     // The reverse also has to hold: both sides go through one normalizer.
     expect(filterMerchants(all, "Łuk").map((entry) => entry.id)).toEqual(["m-luk"]);
   });
@@ -354,6 +410,43 @@ describe("filterMerchants", () => {
     expect(filterMerchants([...all, twin], "kuznia").map((entry) => entry.id)).toEqual(["m-kuznia", "m-twin"]);
   });
 
+  it("keeps sortForLibrary's order on the filtered path too", () => {
+    // The existing order test uses an EMPTY query, which returns before the
+    // filter ever runs — so an implementation that sorted only the unfiltered
+    // branch would ship a panel that reorders to oldest-first the moment the GM
+    // types, with a fully green suite. `saved` reaches the panel in insertion
+    // order, so the unsorted order really is different.
+    const older = merchant({ id: "m-older", name: "Kuźnia stara", savedAt: "2026-09-10T10:00:00.000Z" });
+    const newer = merchant({ id: "m-newer", name: "Kuźnia nowa", savedAt: "2026-09-12T10:00:00.000Z" });
+
+    expect(filterMerchants([older, newer], "kuznia").map((entry) => entry.id)).toEqual(["m-newer", "m-older"]);
+  });
+
+  it("finds a genuinely diacritic-free name from a diacritic-bearing query", () => {
+    // The direction the test above was named for but never covered: both its
+    // sides carried an `ł`, so dropping the ł→l mapping left it green. Here the
+    // stored name has no diacritic at all, so only normalizing the QUERY can
+    // make this match.
+    const plain = merchant({ id: "m-plain", name: "Luk i Cieciwa" });
+
+    expect(filterMerchants([plain], "Łuk").map((entry) => entry.id)).toEqual(["m-plain"]);
+  });
+
+  it("keeps a merchant the caller asks to hold, even when it stops matching", () => {
+    // A GM renaming a row while a query is active can rename it out of its own
+    // results. The row must not vanish mid-edit.
+    const renamed = merchant({ id: "m-kept", name: "Zupelnie inna nazwa" });
+    const matching = merchant({ id: "m-match", name: "Kuźnia" });
+
+    expect(
+      filterMerchants([renamed, matching], "kuznia", "m-kept")
+        .map((entry) => entry.id)
+        .sort(),
+    ).toEqual(["m-kept", "m-match"]);
+    // …and only when asked: without the id it is filtered out as usual.
+    expect(filterMerchants([renamed, matching], "kuznia").map((entry) => entry.id)).toEqual(["m-match"]);
+  });
+
   it("returns an empty array when nothing matches", () => {
     expect(filterMerchants(all, "nekromanta")).toEqual([]);
   });
@@ -369,6 +462,52 @@ describe("filterMerchants", () => {
     const before = input.map((entry) => entry.id);
 
     filterMerchants(input, "kuznia");
+
+    expect(input.map((entry) => entry.id)).toEqual(before);
+  });
+});
+
+describe("holdOrder", () => {
+  const a = merchant({ id: "m-a", savedAt: "2026-09-10T10:00:00.000Z" });
+  const b = merchant({ id: "m-b", savedAt: "2026-09-11T10:00:00.000Z" });
+  const c = merchant({ id: "m-c", savedAt: "2026-09-12T10:00:00.000Z" });
+
+  it("holds the snapshot order even after the list would re-sort", () => {
+    // The whole point: another tab's autosave refreshes `savedAt`, so
+    // `sortForLibrary` would move that row to the top. React moves the focused
+    // <li>, the browser blurs it, and the blur commits a half-typed name.
+    const frozen = ["m-a", "m-b", "m-c"];
+    const resorted = sortForLibrary([a, b, { ...c, savedAt: "2026-09-13T10:00:00.000Z" }]);
+
+    expect(holdOrder(resorted, frozen).map((entry) => entry.id)).toEqual(frozen);
+  });
+
+  it("keeps a merchant that arrived after the freeze, at the end", () => {
+    // Dropping it would hide a merchant purely because the GM is renaming a
+    // different one.
+    const fresh = merchant({ id: "m-new", savedAt: "2026-09-14T10:00:00.000Z" });
+
+    expect(holdOrder([fresh, c, a], ["m-a", "m-c"]).map((entry) => entry.id)).toEqual(["m-a", "m-c", "m-new"]);
+  });
+
+  it("keeps newcomers in their incoming order", () => {
+    // `sort` is stable, so equal ranks do not reshuffle between renders — the
+    // same property `sortForLibrary`'s id tiebreak exists to guarantee.
+    const one = merchant({ id: "m-1" });
+    const two = merchant({ id: "m-2" });
+
+    expect(holdOrder([two, one], []).map((entry) => entry.id)).toEqual(["m-2", "m-1"]);
+  });
+
+  it("drops a merchant that has left the list", () => {
+    expect(holdOrder([a, c], ["m-a", "m-b", "m-c"]).map((entry) => entry.id)).toEqual(["m-a", "m-c"]);
+  });
+
+  it("leaves the input array untouched", () => {
+    const input = [c, a, b];
+    const before = input.map((entry) => entry.id);
+
+    holdOrder(input, ["m-a", "m-b", "m-c"]);
 
     expect(input.map((entry) => entry.id)).toEqual(before);
   });

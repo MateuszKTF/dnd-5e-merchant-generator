@@ -487,6 +487,41 @@ describe("nextSaveSession", () => {
     }
   });
 
+  /**
+   * The whole column, written out — not sampled.
+   *
+   * Every other test of the id here starts from `fresh`, whose id is already
+   * `null`, so it cannot fail for a reducer that returns `current` *or* `null`.
+   * What that hid was `restored`: it replaces the merchant on screen, so
+   * keeping the id points the next autosave at a record the GM is no longer
+   * looking at — and the suite was green with the bug both present and fixed.
+   *
+   * A `Record<SaveEvent, …>` literal rather than a loop with a `continue`: a
+   * new event becomes a compile error here, and the skipped row is where the
+   * bug lives (L-03 — the same shape the `saved` row of `nextSaveState` hid in).
+   *
+   * Looped over every state as well, because the id must not acquire an opinion
+   * about the button: `nextOpenedSavedId` reads only the event.
+   */
+  it("answers for the opened record on every event, from every state", () => {
+    const expected: Record<SaveEvent, string | null> = {
+      generated: null,
+      restored: null,
+      "cleared-open": null,
+      opened: "m-opened",
+      corrected: "m-saved",
+      promoted: "m-saved",
+      "promote-failed": "m-saved",
+      "persistence-off": "m-saved",
+    };
+
+    for (const state of SAVE_STATES) {
+      for (const event of everyEvent) {
+        expect(nextSaveSession({ state, openedSavedId: "m-saved" }, event).openedSavedId).toBe(expected[event.event]);
+      }
+    }
+  });
+
   it("moves the state exactly as nextSaveState does", () => {
     // The pair reducer adds the id; it must not quietly acquire a second
     // opinion about the button.
@@ -543,6 +578,41 @@ describe("openedSavedIdFor", () => {
     const transient = merchant({ id: "m-kowal", savedAt: null });
 
     expect(openedSavedIdFor(documentOf(transient, [opened]))).toBe("m-kowal");
+  });
+
+  it("declines a record whose stored corrections have fallen behind the slot", () => {
+    // A correction writes the transient slot first and the library record
+    // second. When the second write fails, the slot carries work the record
+    // does not. In-session `autosaveFailed` tracks that; nothing persists it,
+    // so after a reload this divergence is the only evidence left. Reporting
+    // the record as open here would stand the discard guard down over the only
+    // copy of that work which exists.
+    const transient = merchant({
+      id: "m-kowal",
+      savedAt: null,
+      corrections: { longsword: { priceGp: 25 } },
+    });
+    const stale = merchant({ id: "m-kowal", savedAt: "2026-09-12T10:00:00.000Z", corrections: {} });
+
+    expect(openedSavedIdFor(documentOf(transient, [stale]))).toBeNull();
+  });
+
+  it("recognises a record holding exactly the same work", () => {
+    // The landed-write case, which must NOT read as divergence: an identical
+    // overlay on both sides. A false negative here fires the discard dialog
+    // over work that is perfectly safe — the cry-wolf failure the guard exists
+    // to avoid.
+    const corrections = { longsword: { priceGp: 25, quantity: 2 } };
+    const transient = merchant({ id: "m-kowal", savedAt: null, corrections });
+    const record = merchant({ id: "m-kowal", savedAt: "2026-09-12T10:00:00.000Z", corrections });
+
+    expect(openedSavedIdFor(documentOf(transient, [record]))).toBe("m-kowal");
+  });
+
+  it("declines a record whose rows no longer match the slot", () => {
+    const transient = merchant({ id: "m-kowal", savedAt: null, rows: [] });
+
+    expect(openedSavedIdFor(documentOf(transient, [opened]))).toBeNull();
   });
 
   it("finds the record among several", () => {

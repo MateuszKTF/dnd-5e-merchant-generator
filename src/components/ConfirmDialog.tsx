@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, type MouseEvent, type SyntheticEvent } from "react";
 
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 interface Props {
   readonly open: boolean;
@@ -135,7 +136,17 @@ export default function ConfirmDialog({
           <Button ref={cancelRef} variant="outline" className="h-11 border-neutral-500 bg-white" onClick={onCancel}>
             {cancelLabel}
           </Button>
-          <Button variant={destructive ? "destructive" : "default"} className="h-11" onClick={onConfirm}>
+          {/* Colours stated here rather than left to the variant, which falls
+              through to `bg-destructive` / `bg-primary` — the shadcn token family
+              AGENTS.md bans, and the same fallthrough the Cancel button below
+              already had to work around. `red-700` is the palette's semantic
+              destructive accent and the same one the library row's delete
+              control uses, so the two read as the same action. */}
+          <Button
+            variant={destructive ? "destructive" : "default"}
+            className={cn("h-11", destructive ? "bg-red-700 text-white hover:bg-red-800" : undefined)}
+            onClick={onConfirm}
+          >
             {confirmLabel}
           </Button>
         </div>

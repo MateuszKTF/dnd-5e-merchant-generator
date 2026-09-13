@@ -292,6 +292,15 @@ export type SaveSessionEvent =
  * explicit `cleared-open` the draw also fires: a fresh draw is by definition no
  * longer the opened record, and making that true in the reducer means a call
  * site that forgets to say so cannot reach the overwrite-a-saved-merchant bug.
+ *
+ * `restored` clears for the same reason, and it is the harder case to see: a
+ * restore **replaces the merchant on screen**. Another tab drawing a fresh
+ * merchant arrives here as `restored`, and keeping the id would point the next
+ * autosave at a record the GM is no longer looking at — writing one shop's
+ * assortment into another's, under a name `updateSavedMerchant` protects, with
+ * no cue that anything happened. Re-opening the same record cross-tab comes
+ * back as `opened` from `reopenEvent`, so nothing is lost by clearing here.
+ *
  * Everything else — a correction, a promote, a failed promote, a stand-down —
  * leaves it alone, because the GM is still looking at the same merchant.
  */
@@ -301,6 +310,7 @@ function nextOpenedSavedId(current: string | null, next: SaveSessionEvent): stri
       return next.savedId;
     case "cleared-open":
     case "generated":
+    case "restored":
       return null;
     default:
       return current;
@@ -347,12 +357,57 @@ export function wouldLoseCorrections(hasCorrections: boolean, openedSavedId: str
  *
  * Returning `null` is the ordinary case: a freshly drawn merchant has an id
  * nothing else shares.
+ *
+ * The id match is necessary but **not sufficient** — see `sameStoredWork` and
+ * the comment at the return. A record whose stored work has fallen behind the
+ * slot is not holding that work, and reporting it as open would stand the
+ * discard guard down over the one copy that exists.
  */
+function sameStoredWork(a: Merchant, b: Merchant): boolean {
+  if (a.rows.length !== b.rows.length) {
+    return false;
+  }
+
+  for (let index = 0; index < a.rows.length; index += 1) {
+    const left = a.rows[index];
+    const right = b.rows[index];
+    if (left.itemId !== right.itemId || left.quantity !== right.quantity || left.priceGp !== right.priceGp) {
+      return false;
+    }
+  }
+
+  const keys = Object.keys(a.corrections);
+  if (keys.length !== Object.keys(b.corrections).length) {
+    return false;
+  }
+
+  return keys.every((key) => {
+    const left = a.corrections[key];
+    const right = b.corrections[key];
+    return left?.quantity === right?.quantity && left?.priceGp === right?.priceGp;
+  });
+}
+
 export function openedSavedIdFor(doc: StorageDocument): string | null {
   const transient = doc.transient;
   if (transient === null) {
     return null;
   }
 
-  return doc.saved.some((merchant) => merchant.id === transient.id) ? transient.id : null;
+  const record = doc.saved.find((merchant) => merchant.id === transient.id);
+  if (record === undefined) {
+    return null;
+  }
+
+  // The id match alone is not enough. A correction writes the transient slot
+  // first and the library record second; if the second write failed, the slot
+  // carries work the record does not — and in-session that is exactly what
+  // `autosaveFailed` tracks. Nothing persists that flag: `adopt` clears it on
+  // every restore, on grounds that are true of the slot and false of the
+  // record. After a reload the divergence is the only evidence left, so it has
+  // to be read off the data. A record that does not hold this work is not
+  // holding it, and the screen is the only copy again — which re-arms both the
+  // discard guard and the save button, so the GM can still get it into the
+  // library.
+  return sameStoredWork(transient, record) ? transient.id : null;
 }

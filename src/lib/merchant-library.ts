@@ -28,23 +28,94 @@ import { formatWallClock, type Merchant } from "./merchant";
 export const MAX_NAME_LENGTH = 60;
 
 /**
+ * Zero-width characters that carry no meaning of their own.
+ *
+ * They survive `\s` — which matches neither U+200B nor U+200D — so without this
+ * a name pasted as nothing but invisibles passes the blank guard, reaches
+ * `renameMerchant`, and leaves a row that renders with no name at all across
+ * every reload. That is the loss the blank guard exists to prevent, arriving by
+ * a route `trim()` cannot see.
+ *
+ * U+200D is deliberately **not** in this set: it joins, so it is load-bearing
+ * inside an emoji sequence and has to survive inside a real name. A string of
+ * nothing but joiners is still blank, which is what `BLANK_NAME` answers.
+ */
+const INVISIBLE_NAME_CHARS = /[\u200B\u200C\uFEFF]/gu;
+
+/**
+ * Everything Unicode classifies as a format character, removed before a search
+ * comparison.
+ *
+ * `\s` catches almost none of these — not U+200B, not U+200C, not U+00AD — which
+ * is exactly why the gap looked closed: the obvious probes (NBSP, U+FEFF) pass.
+ * A stored name or a typed query carrying one is otherwise unfindable by any
+ * query spanning it, and a name pasted out of session notes is the realistic
+ * source: Google Docs, Notion and Discord emit U+200B, while Word, PDFs and
+ * hyphenating browsers emit U+00AD. Both sides, or neither — that symmetry is
+ * what this whole function exists to hold.
+ *
+ * `\p{Cf}` rather than a list, because a list is a guess about which invisibles
+ * a GM will paste and this is the actual category: it covers U+00AD, U+200B-
+ * U+200F, U+2060, U+2066-U+2069 and U+FEFF in one concept.
+ *
+ * **Deliberately wider than {@link INVISIBLE_NAME_CHARS}**, which keeps U+200D
+ * because there it is load-bearing — it holds an emoji sequence together in a
+ * name the GM chose. Here the result is discarded after the comparison, so
+ * keeping it would only make a name with a family emoji unfindable by its plain
+ * letters.
+ */
+const FORMAT_CHARS = /\p{Cf}/gu;
+const BLANK_NAME = /^[\s\u200D]*$/u;
+
+/**
  * Built once, on first use — never at module scope.
  *
  * Every page is prerendered, so this module is imported during a build running
  * in Node/workerd. `Intl` exists in both, but the house rule from F-01 and S-03
  * stands: nothing touches an ambient global at import time, because the day one
  * of them is missing the failure is a broken build rather than a broken call.
+ *
+ * Resolved once and cached even when it is missing, so the `typeof` probe does
+ * not re-run on every commit. `Segmenter` is the youngest API this product
+ * leans on — Firefox shipped it only in 125 (April 2024) — so a Firefox ESR or
+ * an older Android WebView reaches the `null` branch, and an unguarded `new`
+ * there would throw inside a React event handler and kill the rename with
+ * nothing said. Same reasoning and same shape as `newMerchantId`.
  */
 let segmenter: Intl.Segmenter | null = null;
+let segmenterResolved = false;
+
+function graphemeSegmenter(): Intl.Segmenter | null {
+  if (!segmenterResolved) {
+    segmenterResolved = true;
+
+    const api: Partial<typeof Intl> | undefined = typeof Intl === "undefined" ? undefined : Intl;
+    segmenter = typeof api?.Segmenter === "function" ? new api.Segmenter(undefined, { granularity: "grapheme" }) : null;
+  }
+
+  return segmenter;
+}
 
 /**
  * The string as a person would count it: one entry per visible character,
  * combining marks and astral pairs kept whole.
+ *
+ * Without `Segmenter`, code points — the pre-`Segmenter` behaviour. That can
+ * sever a combining mark from its letter, which graphemes never do, but it
+ * never produces a lone surrogate, and both beat a rename that does nothing.
  */
 function toGraphemes(value: string): string[] {
-  segmenter ??= new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  const active = graphemeSegmenter();
+  if (active !== null) {
+    return [...active.segment(value)].map((entry) => entry.segment);
+  }
 
-  return [...segmenter.segment(value)].map((entry) => entry.segment);
+  // `no-misused-spread` is right about what this does — code points, so a ZWJ
+  // emoji decomposes and a combining mark can be cut from its letter. That is
+  // the whole bargain of this branch, taken knowingly: the alternative on a
+  // browser without `Segmenter` is a rename that throws and says nothing.
+  // eslint-disable-next-line @typescript-eslint/no-misused-spread
+  return [...value];
 }
 
 /**
@@ -70,8 +141,8 @@ function toGraphemes(value: string): string[] {
  * notes may arrive decomposed.
  */
 export function normalizeName(raw: string): string | null {
-  const collapsed = raw.replace(/\s+/gu, " ").trim();
-  if (collapsed === "") {
+  const collapsed = raw.replace(INVISIBLE_NAME_CHARS, "").replace(/\s+/gu, " ").trim();
+  if (BLANK_NAME.test(collapsed)) {
     return null;
   }
 
@@ -84,8 +155,11 @@ export function normalizeName(raw: string): string | null {
   // the stored name from ending in whitespace the GM cannot see.
   const truncated = characters.slice(0, MAX_NAME_LENGTH).join("").trimEnd();
 
-  // Only reachable if the cap lands inside a run of spaces, which `collapsed`
-  // has already reduced to single characters — so at most one character goes.
+  // Unreachable, and deliberately kept: `collapsed` is already trimmed, so the
+  // first grapheme is never whitespace and a 60-grapheme slice can never trim
+  // away to nothing. The guard stays so the function is total over its return
+  // type rather than relying on that argument holding after a future edit — but
+  // it is not a live branch, and nothing should be written as though it were.
   return truncated === "" ? null : truncated;
 }
 
@@ -119,12 +193,27 @@ export function normalizeName(raw: string): string | null {
  */
 export function sortForLibrary(merchants: readonly Merchant[]): Merchant[] {
   return [...merchants].sort((a, b) => {
-    if (a.savedAt !== b.savedAt) {
-      if (a.savedAt === null) return 1;
-      if (b.savedAt === null) return -1;
+    // `?? null` because an *absent* `savedAt` is as ordinary as an explicit
+    // `null` in hand-edited or forward-only data, and every comparison against
+    // `undefined` is false — so the branch below answered `-1` in both
+    // directions. That is not a valid comparator: it sorted the record to the
+    // front rather than the back, and left the result depending on the input
+    // order, which is the very reshuffle the `id` tiebreak exists to stop.
+    const aAt = a.savedAt ?? null;
+    const bAt = b.savedAt ?? null;
 
-      return a.savedAt < b.savedAt ? 1 : -1;
+    if (aAt !== bAt) {
+      if (aAt === null) return 1;
+      if (bAt === null) return -1;
+
+      return aAt < bAt ? 1 : -1;
     }
+
+    // `0` for equal ids rather than falling through to `1`. Ids are unique, so
+    // this is not reachable through the library — but a comparator that
+    // disagrees with itself is exactly what the `savedAt` branch above did, and
+    // writing the total form costs nothing.
+    if (a.id === b.id) return 0;
 
     return a.id < b.id ? -1 : 1;
   });
@@ -203,6 +292,8 @@ const COMBINING_MARKS = /\p{M}/gu;
 export function normalizeForSearch(value: string): string {
   return (
     value
+      // Format characters first — see `FORMAT_CHARS`.
+      .replace(FORMAT_CHARS, "")
       .toLowerCase()
       .normalize("NFD")
       .replace(COMBINING_MARKS, "")
@@ -225,7 +316,7 @@ export function normalizeForSearch(value: string): string {
  * The query arrives already normalized — once per keystroke at the caller,
  * rather than once per row here.
  */
-export function matchesQuery(merchant: Merchant, normalizedQuery: string, categoryLabel: string): boolean {
+function matchesQuery(merchant: Merchant, normalizedQuery: string, categoryLabel: string): boolean {
   if (normalizedQuery === "") {
     return true;
   }
@@ -246,8 +337,20 @@ export function matchesQuery(merchant: Merchant, normalizedQuery: string, catego
  *
  * An empty or whitespace-only query is not a filter that matches nothing; it is
  * the absence of a filter, and returns the whole list.
+ *
+ * `keepId` survives the filter whatever it matches. It exists for one case: a
+ * GM renaming a row while a query is active can rename it *out of its own
+ * search results*, and the row would then vanish mid-edit — taking its live
+ * region with it before the announcement it was about to make had rendered.
+ * The filter is a view the GM is steering, not a rule that should react
+ * underneath them, which is the same reasoning that leaves the query in place
+ * after a delete. The caller drops the id the moment the query next changes.
  */
-export function filterMerchants(merchants: readonly Merchant[], query: string): Merchant[] {
+export function filterMerchants(
+  merchants: readonly Merchant[],
+  query: string,
+  keepId: string | null = null,
+): Merchant[] {
   const sorted = sortForLibrary(merchants);
   const normalized = normalizeForSearch(query);
 
@@ -255,7 +358,9 @@ export function filterMerchants(merchants: readonly Merchant[], query: string): 
     return sorted;
   }
 
-  return sorted.filter((merchant) => matchesQuery(merchant, normalized, categoryLabelFor(merchant)));
+  return sorted.filter(
+    (merchant) => merchant.id === keepId || matchesQuery(merchant, normalized, categoryLabelFor(merchant)),
+  );
 }
 
 /**
@@ -272,4 +377,27 @@ function formatSavedAt(iso: string | null): string | null {
   }
 
   return formatWallClock(new Date(iso));
+}
+
+/**
+ * Re-order `merchants` to match `ids`, keeping anything unlisted at the end.
+ *
+ * Holds the list still while a row is being renamed. Another tab's autosave
+ * refreshes `savedAt`, which re-sorts the library; React then reconciles by key
+ * and **moves** the `<li>`, and moving a focused element blurs it — committing
+ * a half-typed name to storage. Freezing the order removes the move, which
+ * removes the blur. A blur guard cannot cover this: the draft is non-null, so
+ * it looks exactly like a real edit being ended.
+ *
+ * Merchants absent from `ids` arrived after the freeze. They go to the end in
+ * their incoming order rather than being dropped, because the panel must not
+ * hide a merchant just because the GM is renaming a different one. `sort` is
+ * stable, so equal ranks keep that order.
+ */
+export function holdOrder(merchants: readonly Merchant[], ids: readonly string[]): Merchant[] {
+  const rank = new Map(ids.map((id, index) => [id, index]));
+
+  return [...merchants].sort(
+    (a, b) => (rank.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (rank.get(b.id) ?? Number.MAX_SAFE_INTEGER),
+  );
 }

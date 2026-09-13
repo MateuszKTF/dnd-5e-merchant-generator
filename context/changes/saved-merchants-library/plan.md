@@ -212,6 +212,22 @@ returns not-found for an unknown id without appending. `restoreFromMerchant` nor
 `category` while keeping the rows intact. `nextSaveState` covers `"opened"` and `"cleared-open"`,
 including that a failed in-place write leaves the button armed.
 
+#### Addendum (recorded 2026-09-13, impl review of Phase 1)
+
+Two departures from the contract above, both accepted at review rather than corrected:
+
+- **`src/lib/merchant-storage.test.ts` was not modified.** F-01 already shipped all four
+  `updateSavedMerchant` properties named above (`merchant-storage.test.ts:218-270`), so the
+  "(modify)" here was the stale item. Verified, not assumed.
+- **The reducer restructure went further than "an `openedSavedId` concept".** Phase 1 landed
+  `SaveSession`, `SaveSessionEvent` and `nextSaveSession` — a genuine improvement, since the pair
+  cannot then move separately — and `nextSaveState` kept its name, signature and every S-03 call
+  site. It also landed **`saveActionFor` / `SaveAction`, which serve Phase 3's step 3.9**. Pure and
+  harmless, but scope this phase boundary did not authorise; noted so a future review does not read
+  it as Phase 3 work that never happened. **Both were deleted again in `c511e47`** when
+  `corrections-autosave` removed the two-variant button label — they do not exist at HEAD, so do not
+  go looking for them.
+
 ### Success Criteria:
 
 #### Automated Verification:
@@ -257,6 +273,16 @@ merchants sharing a name. The currently opened row is marked. An empty list show
 rather than an empty container.
 
 The whole row is the open target, sized as a comfortable tap target.
+
+**Addendum (recorded 2026-09-13, impl review of Phase 2).** This held exactly as landed in
+`32e1317` — one `<button>` wrapped name and detail. It does **not** hold at HEAD. Phase 3's inline
+rename (`5a2eb03`) made the name an `<input>`, and HTML forbids an `<input>` inside a `<button>`, so
+the row necessarily split: the name line renames, the detail line opens, and `d42b7d0` added a third
+control for delete. The constraint is not negotiable, so the contract sentence above is superseded
+rather than unmet. Accepted cost: at 360 px the full-width 44px rename strip sits directly above the
+narrower open strip, so a thumb aiming at "the row" lands on rename — and phone readability is the
+PRD's only NFR. Mitigations in place: the open button carries `aria-label={"Otwórz: " + name}`, the
+detail line is `min-h-11`, and all three controls are separate tab stops.
 
 #### 2. Panel wiring and open
 
@@ -380,6 +406,30 @@ another in-place save.
 
 Generate clears `openedSavedId`, so the next Zapisz adds a new merchant rather than overwriting
 the opened one with an unrelated shop.
+
+#### Addendum (recorded 2026-09-13, impl review of Phase 3)
+
+**Every clause above was implemented as written, and then half of it was deliberately replaced.**
+`corrections-autosave` (`c511e47`, `e5575a0`) removed the "Zapisz zmiany" button for an open record:
+a correction now saves itself, with no press. The supersession is recorded here as well as in
+`change.md`, because this section — not that one — is what a future review reads as the contract.
+
+What changed, and what survived:
+
+- **The Zapisz handler no longer branches on `openedSavedId` for a normal save.** The in-place update
+  is `autosaveOpened`, called from `handleCorrect`. The intent ("update that merchant, don't leave a
+  second near-identical entry") is preserved and strengthened — it now holds without the GM
+  remembering to press anything.
+- **`saveActionFor` / `SaveAction` were deleted in `c511e47`.** The label has one variant, because
+  the button only appears for a merchant outside the library. Progress rows **3.8** and **3.9**
+  describe this removed behaviour and are ticked as closed out, not as verified in their original
+  wording.
+- **"A failed write leaves the button armed" did NOT survive the replacement**, and was restored in
+  this review's triage. Between `c511e47` and 2026-09-13 a failed autosave left *no* save control at
+  all: the button renders only when nothing is open or the state is `saved`, so a GM told by the
+  banner to free space had nothing to press afterwards. The button is now also rendered while
+  `autosaveFailed` is true, and in that state it routes to `autosaveOpened` rather than promoting —
+  promoting there would append the duplicate this whole slice exists to prevent.
 
 ### Success Criteria:
 

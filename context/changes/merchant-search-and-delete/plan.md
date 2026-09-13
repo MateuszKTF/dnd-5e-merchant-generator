@@ -429,7 +429,7 @@ plans is re-planned, that is the file to check.
 - [x] 1.2 Type checking passes: `npx astro check` — d42b7d0
 - [x] 1.3 Production build succeeds: `npm run build` — d42b7d0
 - [x] 1.4 Route still prerendered: `index.html` under `dist/client/` — d42b7d0
-- [x] 1.6 Linting passes: `npm run lint` — d42b7d0
+- [x] 1.5 Linting passes: `npm run lint` — d42b7d0
 
 #### Manual
 

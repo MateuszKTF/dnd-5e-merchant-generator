@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import ConfirmDialog from "@/components/ConfirmDialog";
-import MerchantLibrary from "@/components/MerchantLibrary";
+import MerchantLibrary, { LIBRARY_TOGGLE_ID } from "@/components/MerchantLibrary";
 import MerchantTable from "@/components/MerchantTable";
 import StorageNotice, { isStandingCondition, type StorageCondition } from "@/components/StorageNotice";
 import { Button } from "@/components/ui/button";
@@ -89,8 +89,16 @@ interface ConfirmCopy {
  * Each names what is about to be lost and what is about to happen. "Nowy
  * asortyment" over a tapped library row, or "odrzucić korekty" over a delete,
  * would describe the wrong action to someone about to agree to it.
+ *
+ * `currentName` rather than the snapshotted `action.merchant.name`: the pending
+ * action is captured when the dialog opens, but a rename in another tab arrives
+ * while it is still open — and a rename leaves the transient slot untouched, so
+ * the `storage` handler returns early and `pending` survives. The delete itself
+ * is id-based and stays correct; only the sentence would go stale, naming a
+ * record by a name it no longer has while the announcement afterwards uses the
+ * new one.
  */
-function confirmCopyFor(action: PendingAction): ConfirmCopy {
+function confirmCopyFor(action: PendingAction, currentName: string): ConfirmCopy {
   switch (action.kind) {
     case "generate":
       return {
@@ -110,7 +118,7 @@ function confirmCopyFor(action: PendingAction): ConfirmCopy {
         // The name is the whole point: this is the one dialog where the GM has
         // to know *which* record they are about to lose, and the list may hold
         // two shops sharing a name.
-        body: `„${action.merchant.name}” zniknie z listy i z pamięci przeglądarki. Nie da się tego cofnąć.`,
+        body: `„${currentName}” zniknie z listy i z pamięci przeglądarki. Nie da się tego cofnąć.`,
         confirmLabel: "Usuń",
       };
   }
@@ -169,6 +177,24 @@ function reopenEvent(doc: StorageDocument): SaveSessionEvent {
 }
 
 /**
+ * Which conditions actually engage F-01's read-only latch, and so already
+ * explain a `read-only` write.
+ *
+ * Narrower than `isStandingCondition` on purpose. `STANDING` also carries
+ * `quarantined` and `records-dropped`, and neither latches — so testing for
+ * *standing* left the hole this guard was written to close: a mount read that
+ * salvages raises `records-dropped`, the store is blocked later in the session,
+ * and every write from then on returns `read-only` against a banner that is
+ * about something else entirely.
+ */
+function engagesReadOnlyLatch(condition: StorageCondition): boolean {
+  return condition === "future-version" || condition === "needs-migration" || condition === "unreadable";
+}
+
+/** The delete announcement's region, written to imperatively — see the effect. */
+const DELETE_NOTICE_ID = "merchant-delete-notice";
+
+/**
  * Why a write did not land.
  *
  * `putTransient`, `promoteTransient`, `updateSavedMerchant`, `renameMerchant`
@@ -191,9 +217,10 @@ function conditionFromFailure(status: WriteFailure): StorageCondition | null {
     case "quota-exceeded":
       return "quota-exceeded";
     case "read-only":
-      // The latch is already engaged, and whatever engaged it — `future-version`
-      // or `unreadable` — recorded its own condition when the read hit it.
-      // Reporting "read-only" would replace the reason with its consequence.
+      // Decided by `raiseWriteFailure`, the only caller that can see whether a
+      // standing condition actually recorded the reason. A flat `null` here was
+      // wrong: it assumed a *read* engaged the latch, and a write can engage it
+      // too.
       return null;
     case "not-found":
       // There is no transient record to promote, which means the auto-persist
@@ -240,6 +267,27 @@ export default function MerchantGenerator() {
   // about. `openedSavedId` alone cannot answer the question: it means "was
   // opened", not "is holding the work".
   const [autosaveFailed, setAutosaveFailed] = useState(false);
+
+  // What the last delete did, for the live region below. A delete that
+  // succeeds raises no `StorageNotice` — correctly, nothing went wrong — so
+  // without this the only feedback is a row vanishing, which a screen-reader
+  // user does not get at all.
+  //
+  // **Written to the DOM, not rendered.** React would apply a state change made
+  // in the confirm handler during its *mutation* phase, which runs before
+  // `ConfirmDialog`'s layout effect closes the dialog — so the region would
+  // change while it is still outside an open modal, i.e. inert and hidden from
+  // assistive technology. A live-region mutation nothing is observing is not an
+  // announcement. The passive effect below writes the text once the dialog has
+  // actually closed; React never owns this node's text, so it renders empty and
+  // is left alone afterwards.
+  const announcement = useRef<{ text: string; moveFocus: boolean } | null>(null);
+
+  // Bumped per announcement so the effect re-runs even when the sentence repeats
+  // — duplicate names are permitted by design, so two deletes of "Kowal" produce
+  // identical text, and a value compared by `Object.is` would announce nothing
+  // the second time.
+  const [announcementTick, setAnnouncementTick] = useState(0);
 
   /**
    * The transient slot as this tab last saw it, serialized.
@@ -289,6 +337,41 @@ export default function MerchantGenerator() {
   const raise = useCallback((condition: StorageCondition) => {
     setConditions((current) => (current.includes(condition) ? current : [...current, condition]));
   }, []);
+
+  /**
+   * Raise the notice a failed write earns, if it earns one.
+   *
+   * `read-only` is the case that needs the current conditions, which is why this
+   * exists rather than a bare `conditionFromFailure` at five call sites. The
+   * latch is not always engaged by a read: `loadForWrite` runs `probeWritable`
+   * through its own `readDocument`, so a store that stops accepting writes
+   * mid-session — site data blocked, or any non-quota `setItem` throw, which
+   * `isQuotaError` deliberately routes to "unavailable" — latches *inside a
+   * write*, with no read ever reporting it. Staying silent there is the
+   * guardrail failing in the manner it forbids: delete, save, rename and
+   * autosave all stop landing, and nothing on screen says so.
+   *
+   * So stay quiet only when a standing condition really did record the reason;
+   * otherwise name the consequence, because it is the only thing the GM has.
+   * The check runs inside the updater, so a condition raised moments earlier is
+   * never missed through a stale closure.
+   */
+  const raiseWriteFailure = useCallback(
+    (status: WriteFailure) => {
+      if (status === "read-only") {
+        setConditions((current) =>
+          current.some(engagesReadOnlyLatch) || current.includes("unavailable") ? current : [...current, "unavailable"],
+        );
+        return;
+      }
+
+      const condition = conditionFromFailure(status);
+      if (condition !== null) {
+        raise(condition);
+      }
+    },
+    [raise],
+  );
 
   /**
    * A write landed, so everything that described a failed attempt is over.
@@ -377,9 +460,16 @@ export default function MerchantGenerator() {
     // stored. A failure recorded against the record being replaced must not
     // outlive it, or the guard would fire over work that is not at risk.
     setAutosaveFailed(false);
-    // Same reason: this merchant is now what the slot holds as far as this tab
-    // knows, so a later `storage` event carrying it is not a replacement.
-    lastTransient.current = JSON.stringify(merchant);
+    // The slot claim is deliberately NOT made here. `lastTransient.current`
+    // means "this is what the slot holds", and `adopt` does not write, so it
+    // cannot know. Claiming it here was wrong for `openMerchant`, which adopts
+    // a SAVED record and then persists a different object (`savedAt: null`):
+    // when that write failed the ref matched neither the slot nor anything
+    // else, and the next `storage` event took the replacement path and adopted
+    // the stale previous transient over the merchant just opened. Each caller
+    // now says it for itself — the mount read from the slot it just read, the
+    // `storage` handler before it gets here, and `openMerchant` not at all,
+    // because `persist` records it only once the write lands.
     setHeader({
       id: merchant.id,
       name: merchant.name,
@@ -431,6 +521,33 @@ export default function MerchantGenerator() {
     },
     [raise],
   );
+
+  // Passive on purpose — see `announceDelete`. A layout effect here would run
+  // *before* `ConfirmDialog`'s (children commit first), so it would focus the
+  // toggle and then watch `dialog.close()` take focus away again, and it would
+  // set the notice while the region is still inert.
+  //
+  // Focus first, text second, and deliberately not in one step: NVDA and JAWS
+  // cancel pending speech on a focus change, so a notice set alongside the move
+  // would be preempted by the toggle announcing itself. Moving focus here and
+  // letting the text land in the *following* commit keeps both.
+  useEffect(() => {
+    const queued = announcement.current;
+    if (queued === null) {
+      return;
+    }
+
+    announcement.current = null;
+
+    if (queued.moveFocus) {
+      document.getElementById(LIBRARY_TOGGLE_ID)?.focus();
+    }
+
+    const region = document.getElementById(DELETE_NOTICE_ID);
+    if (region !== null) {
+      region.textContent = queued.text;
+    }
+  }, [announcementTick]);
 
   /**
    * Bring back the last merchant, with no GM action.
@@ -491,6 +608,12 @@ export default function MerchantGenerator() {
 
         const restored = restoreFromDocument(read.doc);
         if (restored !== null) {
+          // Safe here and *only* here: the record came straight out of the
+          // slot, so "this is what the slot holds" is true without a write
+          // having to make it true. The `storage` handler says it for itself
+          // before adopting; `openMerchant` must not, because it puts a
+          // different record in the slot and `persist` owns that claim.
+          lastTransient.current = JSON.stringify(read.doc.transient);
           adopt(restored, reopenEvent(read.doc));
         }
         return;
@@ -580,6 +703,16 @@ export default function MerchantGenerator() {
       // other tab may be a build that wrote a shape this one cannot read.
       if (read.dropped !== undefined) {
         raise("records-dropped");
+      }
+
+      // Another tab deleted the record this one has open. The derived session
+      // already re-arms the button off `saved`, so nothing breaks — but both
+      // sibling discoveries of this same fact say it out loud (`handleRename`'s
+      // `not-found` and `autosaveOpened`'s), and staying quiet here would let
+      // the merchant stop being the open record with no explanation for why the
+      // next Zapisz appends a copy instead of updating it.
+      if (session.openedSavedId !== null && !read.doc.saved.some((entry) => entry.id === session.openedSavedId)) {
+        raise("record-gone");
       }
 
       setSaved(read.doc.saved);
@@ -760,10 +893,7 @@ export default function MerchantGenerator() {
       // other three mutations clear at their own success branch.
       clearEpisodic();
     } else {
-      const condition = conditionFromFailure(written.status);
-      if (condition !== null) {
-        raise(condition);
-      }
+      raiseWriteFailure(written.status);
     }
 
     return written.status;
@@ -785,26 +915,46 @@ export default function MerchantGenerator() {
    * be in it — which makes honesty here cheaper to check, not less important.
    */
   function handleSave() {
-    // Only ever reachable with nothing open — the button is not rendered
-    // otherwise, because an open record has nothing left to save by hand.
+    // With a record open, the button exists only as the retry for a failed
+    // autosave — and it must NOT promote. Appending a near-identical copy to
+    // the list the GM is looking at is precisely what opening-then-saving
+    // exists to avoid, and the record is already in the library; what failed
+    // was the write into it.
+    if (session.openedSavedId !== null) {
+      if (rows !== null && !autosaveOpened(rows, corrections)) {
+        // Said as well as raised, for the reason the delete path records: `raise`
+        // de-duplicates, so pressing a retry against a condition that is already
+        // standing would otherwise change nothing anywhere. A control whose whole
+        // job is "try again" has to answer when the answer is no.
+        announceDelete("Nie udało się zapisać zmian — zobacz komunikat o pamięci.");
+        return;
+      }
+
+      if (rows !== null) {
+        // The same event a landed promote reports, so the button confirms this
+        // save the way it confirms every other one.
+        setSession((current) => nextSaveSession(current, { event: "promoted" }));
+      }
+      return;
+    }
+
+    // Otherwise: nothing open, so this is an ordinary first save.
     const failure = addMerchant();
 
     if (failure === null) {
-      // Both paths report the same event, so S-03's rule — the state moves on
-      // the returned status, never on the press — holds for both unchanged.
-      // `openedSavedId` survives a promote: the GM is still looking at that
-      // merchant, and a further correction re-arms the button for another
-      // in-place save.
+      // S-03's rule — the state moves on the returned status, never on the
+      // press — holds unchanged. `openedSavedId` survives a promote, because
+      // the GM is still looking at that merchant; a further correction then
+      // re-arms and routes to `autosaveOpened`, **not** back to this button.
+      // The button's own in-place branch above exists only as the retry for a
+      // failed autosave.
       setSession((current) => nextSaveSession(current, { event: "promoted" }));
       return;
     }
 
     setSession((current) => nextSaveSession(current, { event: "promote-failed" }));
 
-    const condition = conditionFromFailure(failure);
-    if (condition !== null) {
-      raise(condition);
-    }
+    raiseWriteFailure(failure);
   }
 
   /**
@@ -859,11 +1009,31 @@ export default function MerchantGenerator() {
     };
 
     setHeader(linked);
-    if (rows !== null) {
-      persist(linked, rows, corrections);
+
+    // Checked, like the first `persist` in this function — the asymmetry was
+    // accidental. The promote itself has landed, so this is NOT a failed save
+    // and must not be reported as one: the merchant really is in the library
+    // and `handleSave` will say so.
+    const relinked = rows === null ? "ok" : persist(linked, rows, corrections);
+
+    // **The dispatch is unconditional, on purpose.** Skipping it when the
+    // relink failed looked safer — `openedSavedId` would then name a record the
+    // transient slot does not hold — but it is much worse: `promoted` leaves
+    // `openedSavedId` alone, so it would stay `null`, the next correction would
+    // arm the button instead of auto-saving, and pressing it would call
+    // `addMerchant` a second time and append a near-identical copy. That is the
+    // duplicate this whole slice exists to prevent, traded for a mismatch that
+    // only shows after a reload and that `openedSavedIdFor`'s content check
+    // already catches.
+    setSession((current) => nextSaveSession(current, { event: "opened", savedId: promoted.id }));
+
+    // The honest record of what failed, and it lands where there is now somewhere
+    // to act on it: `autosaveFailed` re-arms the FR-006 discard guard and renders
+    // the retry control.
+    if (relinked !== "ok") {
+      setAutosaveFailed(true);
     }
 
-    setSession((current) => nextSaveSession(current, { event: "opened", savedId: promoted.id }));
     return null;
   }
 
@@ -879,16 +1049,19 @@ export default function MerchantGenerator() {
    * three fields that make it the same merchant — so an auto-save can change
    * what the shop sells and never which shop it is.
    *
-   * **A failed write has no retry control, by decision (2026-09-12).** The
-   * persistent `StorageNotice` carries the whole signal, and the next committed
-   * correction retries on its own. If the GM stops correcting while storage is
-   * refusing writes, the library record simply does not get that edit: the
-   * banner stays up, but nothing forces the issue.
+   * **A failed write now has a retry control** (revised 2026-09-13). The
+   * earlier decision was that the persistent `StorageNotice` carried the whole
+   * signal and the next committed correction would retry on its own — but a GM
+   * who stops correcting while storage refuses writes was left with a banner
+   * telling them to free space and nothing to press afterwards. The save button
+   * is therefore rendered while `autosaveFailed` is true, and routes back here
+   * rather than promoting: appending a near-identical copy to the list the GM is
+   * looking at is the exact failure this slice exists to prevent.
    */
-  function autosaveOpened(nextRows: readonly AssortmentRow[], nextCorrections: CorrectionMap) {
+  function autosaveOpened(nextRows: readonly AssortmentRow[], nextCorrections: CorrectionMap): boolean {
     const openedId = session.openedSavedId;
     if (openedId === null) {
-      return;
+      return false;
     }
 
     const patch = { rows: toStoredRows(nextRows), corrections: toStoredCorrections(nextCorrections) };
@@ -909,10 +1082,7 @@ export default function MerchantGenerator() {
         setSaved((current) => current.filter((entry) => entry.id !== openedId));
         raise("record-gone");
       } else {
-        const condition = conditionFromFailure(result.status);
-        if (condition !== null) {
-          raise(condition);
-        }
+        raiseWriteFailure(result.status);
       }
 
       // The correction is now in React state and nowhere else, so the FR-006
@@ -920,7 +1090,7 @@ export default function MerchantGenerator() {
       // its own — the read that latched raised one — so for that status this
       // remains the only thing standing between the GM and a silent loss.
       setAutosaveFailed(true);
-      return;
+      return false;
     }
 
     setAutosaveFailed(false);
@@ -932,6 +1102,8 @@ export default function MerchantGenerator() {
     // minutes.
     const savedAt = new Date().toISOString();
     setSaved((current) => current.map((entry) => (entry.id === openedId ? { ...entry, ...patch, savedAt } : entry)));
+
+    return true;
   }
 
   /**
@@ -940,13 +1112,18 @@ export default function MerchantGenerator() {
    * A failed write leaves the list exactly as it was — the row falls back to
    * the name still held here — and says why.
    */
-  function handleRename(id: string, name: string) {
+  // Returns whether the rename landed, because the row announces the outcome and
+  // must not announce a success that did not happen. A failed write leaves the
+  // old name on screen, and when the condition is already standing `raise`
+  // de-duplicates — so without this the only thing a screen-reader user gets
+  // from a failed rename is "Nowa nazwa: X".
+  function handleRename(id: string, name: string): boolean {
     const result = renameMerchant(id, name);
 
     if (result.status === "ok") {
       setSaved((current) => current.map((entry) => (entry.id === id ? { ...entry, name } : entry)));
       clearEpisodic();
-      return;
+      return true;
     }
 
     // `not-found` here does not mean "nothing to do" — it means another tab
@@ -958,13 +1135,11 @@ export default function MerchantGenerator() {
     if (result.status === "not-found") {
       setSaved((current) => current.filter((entry) => entry.id !== id));
       raise("record-gone");
-      return;
+      return false;
     }
 
-    const condition = conditionFromFailure(result.status);
-    if (condition !== null) {
-      raise(condition);
-    }
+    raiseWriteFailure(result.status);
+    return false;
   }
 
   /**
@@ -1067,25 +1242,117 @@ export default function MerchantGenerator() {
    * gone, so dropping the row and staying quiet is the honest answer. Raising a
    * failure notice there would report a problem that does not exist.
    */
+  /**
+   * Say the delete happened, and ask for focus to be moved somewhere that
+   * still exists.
+   *
+   * `<dialog>` restores focus to whatever invoked it — here the row's own
+   * delete button, which this very commit unmounts — so without moving it
+   * deliberately a keyboard user lands on `<body>` and restarts at the top of
+   * the document. The panel toggle is the obvious anchor: always mounted, and
+   * where the deleted row was. Nothing else announces the removal either;
+   * `StorageNotice` stays silent because the write succeeded.
+   *
+   * **Requested, not performed.** Focusing from here does nothing: this runs
+   * inside the click handler, while the `<dialog>` is still open and modal —
+   * which makes everything outside it inert, and an inert element cannot take
+   * focus. The browser then closes the dialog and runs its own focusing steps,
+   * which aim at the detached delete button and land on `<body>`. The effect
+   * below is passive, so it runs *after* every layout effect in the commit,
+   * `ConfirmDialog`'s `dialog.close()` included — which is the first moment
+   * the toggle is focusable and the last word on where focus ends up.
+   */
+  /**
+   * Queue what to say, and — for a delete that landed — that focus must move.
+   *
+   * **Queued, not said.** Setting the text here would apply it in React's
+   * *mutation* phase, which runs before `ConfirmDialog`'s layout effect closes
+   * the dialog — so the `role="status"` region would change while it is still
+   * outside an open modal, i.e. inert and hidden from assistive technology. A
+   * live-region mutation nothing is observing is not an announcement, and being
+   * re-exposed when the dialog closes is not itself a content change. That is
+   * the same trap the focus call fell into, one commit phase earlier.
+   */
+  function announceDelete(text: string, moveFocus = false) {
+    announcement.current = { text, moveFocus };
+    setAnnouncementTick((current) => current + 1);
+  }
+
+  function announceDeleted(name: string | null) {
+    announceDelete(name === null ? "Usunięto kupca." : `Usunięto kupca: ${name}.`, true);
+  }
+
   function deleteSavedMerchant(id: string) {
+    // Read before the write, because after it the row is gone from `saved` and
+    // the announcement below would have nothing to name. Duplicate names are
+    // permitted, so this is the GM's own word for the record, not an id.
+    const name = saved.find((entry) => entry.id === id)?.name ?? null;
+
     const result = deleteMerchant(id);
 
-    if (result.status === "ok" || result.status === "not-found") {
-      // No `cleared-open` dispatch here any more. Dropping the row is enough:
-      // the derived session above answers both halves from "is the open record
+    if (result.status === "not-found") {
+      // `not-found` does **not** only mean "another tab deleted it while this
+      // tab's dialog was open" — the one case the plan authorises it for.
+      // `loadForWrite` substitutes an empty document for both `empty` and
+      // `quarantined`, so `deleteMerchant` answers `not-found` just as readily
+      // when the store was cleared in another tab, or when an unparseable
+      // payload was quarantined — which **overwrites the main key**, taking the
+      // whole library with it. Nothing was written in either case.
+      //
+      // Filtering one row here would drop it and announce a success while the
+      // other N−1 merchants no longer exist anywhere — the guardrail failing in
+      // exactly the manner it forbids. `MutationResult` cannot tell the two
+      // apart, so the only way to know is to look.
+      const read = readDocument();
+
+      if (read.status === "ok" || read.status === "read-only") {
+        // The same two notices the mount read and the `storage` handler raise off
+        // this shape, because it is the same shape. Without them a salvaging
+        // re-read drops records here in silence and the next write makes the loss
+        // permanent — inside the branch whose whole purpose is telling the truth
+        // about what is left.
+        if (read.dropped !== undefined) {
+          raise("records-dropped");
+        }
+        if (read.status === "read-only") {
+          raise("unavailable");
+        }
+
+        setSaved(read.doc.saved);
+      } else if (read.status === "empty") {
+        setSaved([]);
+      } else {
+        handleFailedRead(read.status);
+        return;
+      }
+
+      // Announced either way: the record the GM asked to be gone is gone. What
+      // changed is that the panel now tells the truth about everything else.
+      announceDeleted(name);
+      return;
+    }
+
+    if (result.status === "ok") {
+      // No `cleared-open` dispatch here. Dropping the row is enough: the
+      // derived session above answers both halves from "is the open record
       // still in `saved`", so this path, another tab's delete and rename's
       // `not-found` all re-arm the button by the same rule instead of by three
       // handlers remembering to.
       setSaved((current) => current.filter((entry) => entry.id !== id));
       clearEpisodic();
+      announceDeleted(name);
 
       return;
     }
 
-    const condition = conditionFromFailure(result.status);
-    if (condition !== null) {
-      raise(condition);
-    }
+    // Said as well as raised. `raise` de-duplicates, so when the condition is
+    // already standing — the ordinary case once a store has refused one write —
+    // confirming a delete would otherwise close the dialog, leave the row, and
+    // change nothing whatsoever in the DOM. The success path announces itself;
+    // the failure path has to as well, or the GM's confirm has no outcome they
+    // can perceive. Focus stays put: the row is still there.
+    raiseWriteFailure(result.status);
+    announceDelete("Nie udało się usunąć kupca — zobacz komunikat o pamięci.");
   }
 
   // Changes nothing: not the rows, not the overlay, not category or wealth, not
@@ -1254,7 +1521,17 @@ export default function MerchantGenerator() {
   // The closed dialog still needs strings for its required props. Falling back
   // to the regenerate copy is arbitrary and invisible: nothing renders it,
   // because `open` is false in exactly the case this fallback covers.
-  const copy = confirmCopyFor(pending ?? { kind: "generate" });
+  //
+  // The name is resolved from `saved` at render time, falling back to the one
+  // captured when the dialog opened — so a rename arriving from another tab
+  // while the question is on screen updates the sentence instead of leaving it
+  // naming a record by a name it no longer has.
+  const pendingName =
+    pending !== null && pending.kind === "delete"
+      ? (saved.find((entry) => entry.id === pending.merchant.id)?.name ?? pending.merchant.name)
+      : "";
+
+  const copy = confirmCopyFor(pending ?? { kind: "generate" }, pendingName);
 
   return (
     // px-4 keeps a gutter at 360 px; the max-width stops the table stretching
@@ -1330,7 +1607,7 @@ export default function MerchantGenerator() {
             the confirmation; the next correction re-arms the state, this
             condition goes false, and it disappears again. It can never be
             *pressed* with a record open, because `saved` is not `armed`. */}
-        {rows !== null && (session.openedSavedId === null || session.state === "saved") && (
+        {rows !== null && (session.openedSavedId === null || session.state === "saved" || autosaveFailed) && (
           <Button
             onClick={handleSave}
             disabled={session.state !== "armed"}
@@ -1358,6 +1635,16 @@ export default function MerchantGenerator() {
       <p role="status" className="sr-only">
         {session.state === "saved" ? "Kupiec zapisany w bibliotece." : ""}
       </p>
+
+      {/* Its own region rather than a second message in the one above:
+          multiplexing them meant a delete masked every later save announcement,
+          because `deletedNotice` has no moment at which it becomes false. Two
+          regions, one fact each, both always mounted. */}
+      {/* Deliberately childless: its text is written by the effect above, once
+          the dialog has closed and the region is no longer inert. Giving React
+          a child here would put the announcement back in the mutation phase,
+          which is the bug this shape exists to avoid. */}
+      <p id={DELETE_NOTICE_ID} role="status" className="sr-only" />
 
       <StorageNotice conditions={conditions} />
 
