@@ -424,5 +424,5 @@ Nowy `StorageCondition` nie jest persystowany — `conditions` to stan wyspy, ż
 
 #### Manual
 
-- [ ] 3.2 Wpis czyta się jako reguła na przyszłość, nie jako raport z audytu
+- [x] 3.2 Wpis czyta się jako reguła na przyszłość, nie jako raport z audytu
 - [x] 3.3 Wskaźnik do `research.md` prowadzi do istniejącego pliku i sekcji z F5–F11

@@ -1,7 +1,7 @@
 ---
 change_id: storage-layer-consistency-audit
 title: "Audyt spójności warstwy zapisu przed zamknięciem M-1"
-status: implementing
+status: implemented
 created: 2026-09-14
 updated: 2026-09-14
 archived_at: null
