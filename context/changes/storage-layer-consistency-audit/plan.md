@@ -420,7 +420,7 @@ Nowy `StorageCondition` nie jest persystowany — `conditions` to stan wyspy, ż
 
 #### Automated
 
-- [ ] 3.1 `npm run format` nie zmienia `context/foundation/lessons.md`
+- [x] 3.1 `npm run format` nie zmienia `context/foundation/lessons.md`
 
 #### Manual
 

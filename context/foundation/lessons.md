@@ -16,8 +16,8 @@ w kategorii `przedmioty-magiczne` (m.in. `4 x Belt of Hill Giant Strength` po 57
 oraz **34 897 gp** u alchemika.
 
 Powód: pula magiczna zaczyna się dopiero od 110 gp, a jej tier „niezwykłe" to
-520–4800 gp bazowo. Zamożność steruje *którą część puli* bierzemy, a nie *ile złota
-leży na półce*. Modyfikator ceny dla `nędzna` (×1.2) jeszcze to pogarsza, bo podnosi
+520–4800 gp bazowo. Zamożność steruje _którą część puli_ bierzemy, a nie _ile złota
+leży na półce_. Modyfikator ceny dla `nędzna` (×1.2) jeszcze to pogarsza, bo podnosi
 ceny tam, gdzie osadu nie stać.
 
 **Reguła.** Kiedy reguła domenowa normuje **udziały**, sprawdź osobno, czy normuje też
@@ -36,7 +36,7 @@ zbudowania. Kandydaci na domknięcie, od najtańszego:
 **Konsekwencja dla kryterium sukcesu.** To jest najpoważniejsze znane zagrożenie dla
 „8 na 10 MG uznaje asortyment za gotowy bez ręcznych modyfikacji". MG zobaczy 84 tys. gp
 w nędznej wiosce i poprawi listę ręcznie. Zob. też `[[S-02 manual-item-corrections]]`,
-który daje narzędzie do poprawki — ale kryterium mówi o *nie musieniu* poprawiać.
+który daje narzędzie do poprawki — ale kryterium mówi o _nie musieniu_ poprawiać.
 
 ---
 
@@ -109,3 +109,46 @@ gdzie działa.
 `vitest.config.ts` — por. `[[L-03]]`, gdzie zawiódł zasięg testu, nie lintu), a w szczególności
 każdy plan powołujący się na istniejącą bramkę jako uzasadnienie, że czegoś nie trzeba sprawdzać
 ręcznie.
+
+---
+
+## L-05: Zielony zestaw testów mówi o tym, co uruchomił — nie o tym, co istnieje
+
+**Data:** 2026-09-14 · **Wyszło z:** audytu warstwy zapisu (`storage-layer-consistency-audit`)
+
+**Obserwacja.** `npm test` raportuje `7 passed (7)`, `366 passed (366)` i jest to prawda.
+Audyt mutacyjny potwierdził, że ten zestaw jest naprawdę mocny: **21 z 23 zasadzonych mutantów
+zginęło**, a żaden z sześciu testów ścieżek awaryjnych magazynu nie okazał się pusty.
+
+A mimo to `vitest.config.ts:23` globuje `include: ["src/**/*.test.ts"]` przy `environment: "node"`,
+więc **ani jeden plik `.tsx` nie jest ładowany przez runner**. Poza zasięgiem zostaje 2 979 linii:
+całe mapowanie statusów magazynu na komunikaty, nasłuch `storage` między kartami, efekt
+przywracania na mount, relink po `promoteTransient` i polityka standing-vs-episodic. Trzy defekty
+z tego audytu — w tym jeden w zasięgu guardraila PRD — mieszkały dokładnie tam.
+
+Nie ma też klucza `coverage` nigdzie w `vitest.config.ts` ani w `package.json`, więc **nic tego
+nie pokazuje**. Bramka nie kłamie; ona po prostu odpowiada na inne pytanie, niż się jej zadaje.
+
+To jest `[[L-04]]` drugi raz, w innym przebraniu — i jego własna sekcja „Applies to" wymieniała
+`vitest.config.ts` jako kandydata, zanim to się stało. Tam paczka nazywała się „jsx-a11y" i
+obejmowała tylko `.astro`. Tutaj licznik mówi „366 passed" i obejmuje tylko `.ts`.
+
+**Reguła.** Liczba przechodzących testów jest miarą **przebiegu**, nie **pokrycia**. Zanim
+powołasz się w planie lub review na to, że coś jest przetestowane, sprawdź dwie rzeczy osobno:
+
+1. **Zasięg** — który glob, jakie środowisko, które pliki runner faktycznie ładuje. Odpowiedź
+   jest w configu, nie w liczniku.
+2. **Czy test dotyka badanego kodu** — mutacją. Zepsuj celowo to, co test rzekomo strzeże,
+   i sprawdź, czy zestaw pada **na tym teście**. Test, który przechodzi z mutacją i bez niej,
+   nie strzeże niczego (por. `[[L-03]]`).
+
+Punkt 2 nie jest teoretyczny: ten audyt znalazł test, którego komentarz brzmiał _„If this ever
+starts returning the id, promote stopped minting and the whole inference underneath this function
+is unsound"_ — i który nigdy nie wywoływał `promoteTransient`. Budował oba obiekty z literałów,
+więc pod mutacją został zielony. Deklaracja w komentarzu nie jest asercją.
+
+**Applies to:** każde zdanie w planie, review albo docblocku w postaci „to jest pokryte" /
+„test tego pilnuje" / „bramka to złapie". W szczególności każdy niezmiennik **międzymodułowy** —
+w tym repo jest ich dziewięć trzymanych wyłącznie prozą, przy dokładnie jednym egzekwowanym
+mechanicznie (asercja `MutuallyAssignable` w `merchant.test.ts`). Pełna lista z `file:line`:
+`context/changes/storage-layer-consistency-audit/research.md`, ustalenia F5–F11.
