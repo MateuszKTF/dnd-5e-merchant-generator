@@ -177,18 +177,28 @@ function reopenEvent(doc: StorageDocument): SaveSessionEvent {
 }
 
 /**
- * Which conditions actually engage F-01's read-only latch, and so already
- * explain a `read-only` write.
+ * Which read outcomes stand persistence down for the rest of the page load.
  *
- * Narrower than `isStandingCondition` on purpose. `STANDING` also carries
- * `quarantined` and `records-dropped`, and neither latches — so testing for
- * *standing* left the hole this guard was written to close: a mount read that
- * salvages raises `records-dropped`, the store is blocked later in the session,
- * and every write from then on returns `read-only` against a banner that is
- * about something else entirely.
+ * The rule that separates these three from the rest is recoverability *from
+ * inside this build*: a document a newer build owns, one older than any
+ * migration this build carries, and one whose quarantine could not be written
+ * are all dead ends here. A disabled store, a full one, and a store that
+ * refuses writes are not — the first two are fixed by the GM, and the third is
+ * fixed by leaving private mode, so each keeps a pressable button whose failure
+ * can name its remedy.
+ *
+ * **One predicate, both discovery paths.** The same three statuses used to be
+ * spelled out twice — once here over `StorageCondition` and once inline in
+ * `handleFailedRead` — with nothing linking the copies, so a fourth latching
+ * status would have had to be remembered in two places and would have compiled
+ * either way. Taking `ReadResult["status"]` is what lets the write path use it
+ * too: `loadForWrite` collapses four causes into one `read-only`, so the only
+ * way a write can know which happened is to re-read and ask this.
  */
-function engagesReadOnlyLatch(condition: StorageCondition): boolean {
-  return condition === "future-version" || condition === "needs-migration" || condition === "unreadable";
+function standsPersistenceDown(
+  status: ReadResult["status"],
+): status is "future-version" | "needs-migration" | "unreadable" {
+  return status === "future-version" || status === "needs-migration" || status === "unreadable";
 }
 
 /** The delete announcement's region, written to imperatively — see the effect. */
@@ -351,17 +361,34 @@ export default function MerchantGenerator() {
    * guardrail failing in the manner it forbids: delete, save, rename and
    * autosave all stop landing, and nothing on screen says so.
    *
-   * So stay quiet only when a standing condition really did record the reason;
-   * otherwise name the consequence, because it is the only thing the GM has.
-   * The check runs inside the updater, so a condition raised moments earlier is
-   * never missed through a stale closure.
+   * **It names the real cause, not a guess at it.** `loadForWrite` collapses
+   * `future-version`, `needs-migration`, `unreadable` and a write-refusing
+   * store into one `read-only` status, so this used to raise `unavailable` for
+   * all four — telling a GM whose document belongs to a newer build that their
+   * site data is off, and leaving the save button armed over the one status
+   * that must disarm it. The cause is recoverable by looking: `readDocument`
+   * judges `isFutureVersion` on the parsed payload rather than on the latch, so
+   * it still reports the truth after the latch is engaged. The extra read costs
+   * a `getItem` on a path where a write has already failed.
+   *
+   * `raise` de-duplicates, so a cause already on screen is not said twice.
    */
   const raiseWriteFailure = useCallback(
     (status: WriteFailure) => {
       if (status === "read-only") {
-        setConditions((current) =>
-          current.some(engagesReadOnlyLatch) || current.includes("unavailable") ? current : [...current, "unavailable"],
-        );
+        const cause = readDocument();
+
+        if (standsPersistenceDown(cause.status)) {
+          raise(cause.status);
+          setSession((current) => nextSaveSession(current, { event: "persistence-off" }));
+          return;
+        }
+
+        // Everything else that reaches here is a store that will not take a
+        // write and is not a dead end this build can detect any further:
+        // Safari's private mode is the live case. It keeps the button armed on
+        // purpose — see `standsPersistenceDown`.
+        raise("write-refused");
         return;
       }
 
@@ -515,7 +542,7 @@ export default function MerchantGenerator() {
     (status: Exclude<ReadResult["status"], "ok" | "empty" | "read-only">) => {
       raise(status);
 
-      if (status === "future-version" || status === "needs-migration" || status === "unreadable") {
+      if (standsPersistenceDown(status)) {
         setSession((current) => nextSaveSession(current, { event: "persistence-off" }));
       }
     },
@@ -582,15 +609,19 @@ export default function MerchantGenerator() {
       // eslint-disable-next-line no-fallthrough
       case "ok": {
         if (read.status === "read-only") {
-          // The notice, but deliberately **not** `persistence-off`. S-03's
-          // asymmetry: only `future-version` stands persistence down, because
-          // only it means "do not write at all". A store that merely refuses
-          // writes — Safari's private mode — is recoverable, and `stood-down`
-          // is absorbing, so disarming here would kill the button for the rest
-          // of the page load and hide the remedy along with it. The GM presses
-          // Save, the write fails, and the failure names something they can
-          // act on. See `merchant-session.ts`, `SaveState`.
-          raise("unavailable");
+          // The notice, but deliberately **not** `persistence-off`. A store that
+          // merely refuses writes — Safari's private mode — is recoverable by
+          // leaving private mode, and `stood-down` is absorbing, so disarming
+          // here would kill the button for the rest of the page load and hide
+          // the remedy along with it. See `standsPersistenceDown`.
+          //
+          // Its own condition, not `unavailable`. That one is about this
+          // device's settings and tells the GM to re-enable site data, which is
+          // not the problem and not the fix; it also says nothing about the
+          // reload the latch makes necessary. The press still fails — that is
+          // the point of leaving the button armed — but now the failure names
+          // something true.
+          raise("write-refused");
         }
 
         // Records F-01 could not read are gone from `saved`, and the next write
@@ -688,9 +719,9 @@ export default function MerchantGenerator() {
         // FIRST time mid-session: the store filled or was disabled after mount,
         // `probeWritable` fails on this re-read, and F-01 latches. Without this
         // the tab adopts the incoming merchant and every write from then on
-        // comes back `read-only`, which `conditionFromFailure` maps to no notice
-        // — persistence stopped, with nothing on screen saying so.
-        raise("unavailable");
+        // comes back `read-only` — persistence stopped, and before this
+        // condition existed the only thing on screen said site data was off.
+        raise("write-refused");
       }
 
       // Only an `ok` re-read may refresh the library — the same rule this
@@ -955,6 +986,16 @@ export default function MerchantGenerator() {
     setSession((current) => nextSaveSession(current, { event: "promote-failed" }));
 
     raiseWriteFailure(failure);
+
+    // Said as well as raised, for the reason the retry path above records and
+    // the delete path records again: `raise` de-duplicates, so pressing Save
+    // against a condition that is already standing changed **nothing in the
+    // DOM** — the button went armed → armed, the banner was already up, and the
+    // `role="status"` region below only speaks on `saved`. A store latched
+    // read-only puts the GM in exactly that state on every press. A press with
+    // no perceivable outcome reads as a broken control, and a screen-reader
+    // user got silence.
+    announceDelete("Nie udało się zapisać kupca — zobacz komunikat o pamięci.");
   }
 
   /**
@@ -1315,7 +1356,7 @@ export default function MerchantGenerator() {
           raise("records-dropped");
         }
         if (read.status === "read-only") {
-          raise("unavailable");
+          raise("write-refused");
         }
 
         setSaved(read.doc.saved);

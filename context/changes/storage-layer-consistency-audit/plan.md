@@ -393,19 +393,19 @@ Nowy `StorageCondition` nie jest persystowany — `conditions` to stan wyspy, ż
 
 #### Automated
 
-- [x] 1.1 Testy przechodzą: `npm test`
-- [x] 1.2 Typy przechodzą: `npm run typecheck`
-- [x] 1.3 Lint przechodzi: `npm run lint`
-- [x] 1.4 Mutacja kontrolna: `newMerchantId()` → `transient.id` wywala nowy test w `merchant-storage.test.ts`
-- [x] 1.5 Mutacja kontrolna: cofnięcie klasy znaków do trzech znaków wywala rozszerzoną pętlę
+- [x] 1.1 Testy przechodzą: `npm test` — 2e6c8c4
+- [x] 1.2 Typy przechodzą: `npm run typecheck` — 2e6c8c4
+- [x] 1.3 Lint przechodzi: `npm run lint` — 2e6c8c4
+- [x] 1.4 Mutacja kontrolna: `newMerchantId()` → `transient.id` wywala nowy test w `merchant-storage.test.ts` — 2e6c8c4
+- [x] 1.5 Mutacja kontrolna: cofnięcie klasy znaków do trzech znaków wywala rozszerzoną pętlę — 2e6c8c4
 
 ### Phase 2: Mapowanie statusów zapisu i komunikaty
 
 #### Automated
 
-- [ ] 2.1 Typy przechodzą: `npm run typecheck`
-- [ ] 2.2 Lint przechodzi: `npm run lint`
-- [ ] 2.3 Testy `src/lib` nadal przechodzą: `npm test`
+- [x] 2.1 Typy przechodzą: `npm run typecheck`
+- [x] 2.2 Lint przechodzi: `npm run lint`
+- [x] 2.3 Testy `src/lib` nadal przechodzą: `npm test`
 
 #### Manual
 

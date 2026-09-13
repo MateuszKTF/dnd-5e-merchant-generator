@@ -12,10 +12,15 @@
  * Everything the GM has to be told about, in the vocabulary of the thing that
  * happened rather than of the call that failed.
  *
- * `read-only` is deliberately absent: it is a consequence of a condition already
- * on screen, since the latch is engaged *by* `future-version`, `needs-migration`
- * or `unreadable`. Naming the consequence would replace the reason with its
- * symptom.
+ * `read-only` is present as `write-refused`, and the rename is the point. It
+ * used to be absent on the reading that the latch is only ever engaged *by*
+ * `future-version`, `needs-migration` or `unreadable`, so naming it would
+ * replace a reason with its symptom. That reading was wrong: a store that
+ * reads fine and refuses writes — Safari's private mode — latches on its own,
+ * with no other condition on screen to explain it. It was reported as
+ * `unavailable`, whose copy is about this device's settings and names no
+ * remedy the GM can act on, because the latch outlives the page load and site
+ * data was never the problem.
  *
  * `not-found` is absent as a *status* but present as `record-gone`, and the
  * difference is which call discovered it. On a promote it means the earlier
@@ -32,6 +37,7 @@ export type StorageCondition =
   | "record-gone"
   | "quarantined"
   | "unreadable"
+  | "write-refused"
   | "superseded";
 
 /**
@@ -77,6 +83,14 @@ const MESSAGES: Record<StorageCondition, string> = {
   // GM reads a message about reading and presses a Save that cannot work.
   unreadable:
     "Nie udało się odczytać zapisanych danych. Nie zostały skasowane — wciąż są w pamięci przeglądarki tam, gdzie były. Nic nie zostanie zapisane do czasu odświeżenia strony: zwolnij miejsce i odśwież, żeby spróbować je odzyskać.",
+  // Distinct from `unavailable`, and the distinction is the remedy. That one is
+  // about this device's settings — re-enable site data and saving works again.
+  // This one is a store that hands over everything it holds and refuses every
+  // write, which is Safari's private mode: site data is not off, and there is
+  // nothing to re-enable. F-01 latches on the read, and the latch lasts the
+  // page load, so the reload clause is not advice — it is the only way back.
+  "write-refused":
+    "Ta przeglądarka nie pozwala nic zapisać — zwykle tryb prywatny. Zapisani kupcy są widoczni i generator działa normalnie, ale nic nowego nie zostanie zapisane do czasu odświeżenia strony poza trybem prywatnym.",
   superseded:
     "Inna karta zapisała innego kupca i to on jest teraz na ekranie. Ręczne korekty z tej karty zostały zastąpione.",
 };
@@ -102,6 +116,11 @@ const STANDING: readonly StorageCondition[] = [
   "future-version",
   "needs-migration",
   "unreadable",
+  // Standing for the same reason as the three above: F-01 latched on the read,
+  // and the latch lasts the page load. Clearing it on a later successful write
+  // would be doubly wrong here — there is no later successful write to clear it
+  // with, since every one of them is refused.
+  "write-refused",
   "quarantined",
   "records-dropped",
 ];
@@ -123,6 +142,7 @@ const ORDER: readonly StorageCondition[] = [
   "future-version",
   "needs-migration",
   "unreadable",
+  "write-refused",
   "quarantined",
   "records-dropped",
   "unavailable",
