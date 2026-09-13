@@ -409,12 +409,12 @@ Nowy `StorageCondition` nie jest persystowany — `conditions` to stan wyspy, ż
 
 #### Manual
 
-- [ ] 2.4 Tryb prywatny Safari: biblioteka widoczna, komunikat o przeładowaniu, Zapisz daje wypowiedziany wynik
-- [ ] 2.5 Czytnik ekranu: naciśnięcie Zapisz jest słyszalne
-- [ ] 2.6 `schemaVersion: 2` podmieniony po wczytaniu: trwałość wyłączona, komunikat o nowszej wersji
-- [ ] 2.7 Ten sam scenariusz odkryty przez odczyt: zachowanie bez zmian wobec dziś
-- [ ] 2.8 Pełny magazyn: przycisk aktywny, zwolnienie miejsca kończy się udanym zapisem, komunikat znika
-- [ ] 2.9 Dwie karty: `record-gone` nadal działa i nie miesza się z nowym warunkiem
+- [x] 2.4 Tryb prywatny Safari: biblioteka widoczna, komunikat o przeładowaniu, Zapisz daje wypowiedziany wynik
+- [x] 2.5 Czytnik ekranu: naciśnięcie Zapisz jest słyszalne
+- [x] 2.6 `schemaVersion: 2` podmieniony po wczytaniu: trwałość wyłączona, komunikat o nowszej wersji
+- [x] 2.7 Ten sam scenariusz odkryty przez odczyt: zachowanie bez zmian wobec dziś
+- [x] 2.8 Pełny magazyn: przycisk aktywny, zwolnienie miejsca kończy się udanym zapisem, komunikat znika
+- [x] 2.9 Dwie karty: `record-gone` nadal działa i nie miesza się z nowym warunkiem
 
 ### Phase 3: Zapis długu
 
@@ -425,4 +425,4 @@ Nowy `StorageCondition` nie jest persystowany — `conditions` to stan wyspy, ż
 #### Manual
 
 - [ ] 3.2 Wpis czyta się jako reguła na przyszłość, nie jako raport z audytu
-- [ ] 3.3 Wskaźnik do `research.md` prowadzi do istniejącego pliku i sekcji z F5–F11
+- [x] 3.3 Wskaźnik do `research.md` prowadzi do istniejącego pliku i sekcji z F5–F11
