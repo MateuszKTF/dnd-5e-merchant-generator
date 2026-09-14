@@ -99,10 +99,10 @@ orchestrator updates Status as artifacts appear on disk.
 
 | # | Phase name | Goal (one line) | Risks covered | Test types | Status | Change folder |
 |---|---|---|---|---|---|---|
-| 1 | Island test reachability and save-failure reporting | Prove a failed write can never render as success — which first requires `.tsx` to be inside the runner at all | #1 (partial), #10 | runner/environment bootstrap, component, unit | complete | `context/changes/testing-island-reachability/` |
+| 1 | Island test reachability and save-failure reporting | Prove a failed write can never render as success — which first requires `.tsx` to be inside the runner at all | #1 (partial), #10 | runner/environment bootstrap, component, unit | complete (+ real-quota e2e) | `context/changes/testing-island-reachability/` |
 | 2 | Persistence round-trip and lifecycle | Prove work survives a tab close, edits survive a round-trip, and promotion mints exactly one entry | #2, #3, #4 | integration round-trip, unit, mechanical invariant assertions | browser slice done; core not started | — |
-| 3 | Hostile input and schema-version resilience | Prove garbage and older documents degrade explicitly rather than silently | #5, #6 | unit with hostile and frozen per-version fixtures | not started | — |
-| 4 | Quality-gates wiring | Make the floor mechanical, so scope is visible rather than assumed | cross-cutting (locks #1–#6) | coverage reporting, runner-scope gate, bundle assertion | not started | — |
+| 3 | Hostile input and schema-version resilience | Prove garbage and older documents degrade explicitly rather than silently | #5, #6 | unit with hostile and frozen per-version fixtures | browser slice done; unit core not started | — |
+| 4 | Quality-gates wiring | Make the floor mechanical, so scope is visible rather than assumed | cross-cutting (locks #1–#6) | coverage reporting, runner-scope gate, bundle assertion | bundle boundary asserted; gates not wired | — |
 | 5 | Critical-screen phone verification | Prove the project's only NFR holds on the screen a GM actually uses at the table | #7 | deterministic viewport check, selective multimodal review | automated checks done; one defect parked | — |
 
 **Phase 1 is `complete`, and Risk #1 is closed.** The phase shipped what it
@@ -118,9 +118,26 @@ now empty, which is its desired state. Scope note: this reversed the plan's
 "What We're NOT Doing" line on island-layer defects, deliberately and with the
 owner's agreement.
 
-**Browser-level slice landed 2026-09-14 (`/10x-e2e`).** Playwright now exists,
-and it carries five tests — the only ones whose risk cannot be reached from
-jsdom. This does **not** advance Phases 2 or 5 as wholes:
+**Browser-level slice landed 2026-09-14 (`/10x-e2e`).** Playwright now exists
+and carries 20 tests. Every rollout phase was put through the E2E eligibility
+gate, and each turned out to have some residue that only a real browser can
+reach — but in every case that residue is a *slice*, never the phase:
+
+- **Phase 1** — closed at the component layer, but the `dom` project models a
+  full store by making `setItem` throw a synthetic `QuotaExceededError`. That
+  takes the browser's own quota accounting on trust, which is the L-05 shape.
+  E2E now exhausts real quota and asserts a failed write is never reported as a
+  success, and that freeing space makes saving work again.
+- **Phase 3** — the parse boundary is unit work and stays there. What a unit
+  test cannot answer is what the GM sees when the document is already broken at
+  page load: five hand-authored hostile documents now drive the whole mount
+  path, plus the rollback-asymmetry case (a newer document must survive older
+  code byte for byte).
+- **Phase 4** — almost entirely non-browser and still owned by
+  `/10x-implement`. The one item with a runtime consequence is the
+  client-bundle assertion; the static `dist/client/` grep remains the primary
+  gate, and E2E asserts the same boundary from the served side (no third-party
+  origin, no Supabase global or inlined credential).
 
 - **Phase 2** — its browser half is done: a cell draft typed but never blurred
   survives a reload (the lifecycle commit path), and regenerating over
@@ -194,7 +211,7 @@ phase lands; before that, the gate is planned.
 | component / island tests | local + CI | required, since §3 Phase 1 | save-failure reporting regressions — the layer that had no automated check of any kind before |
 | coverage reporting | CI | report-only since §3 Phase 1; threshold after §3 Phase 4 | the lessons L-04 and L-05 class of failure: a green counter answering a different question than the one being asked |
 | quarantine ledger | local + CI | required, since §3 Phase 1 | a known defect being parked without being written down, or staying parked after it is fixed. **Extended 2026-09-14** to scan `tests/e2e/**` for `test.fail(` as well as `src/**` for `it.fails(` — otherwise an E2E park would go unrecorded while the count still looked truthful. Both counts are line-anchored, so a spec documenting its own convention in prose is not counted as a defect |
-| e2e (browser-level) | local + CI | required, since the §3 Phase 5 slice | the five behaviours jsdom cannot exercise honestly (§6.2). Runs `npm run test:e2e`; needs Chromium installed (`npx playwright install chromium`) and starts the dev server itself |
+| e2e (browser-level) | local + CI | required, since 2026-09-14 | the behaviours jsdom cannot exercise honestly (§6.2), plus the premises the other layers take on trust: real quota exhaustion, a hostile document at real page load, and the served client bundle. Runs `npm run test:e2e`; needs Chromium (`npx playwright install chromium`) and starts the dev server itself |
 | lint warning budget | CI | required after §3 Phase 4 | `eslint .` carries no `--max-warnings`, so every warn-level rule — `no-console` among them — passes CI silently today |
 | `scripts/**` lint coverage | CI | required after §3 Phase 4 | `scripts/**` is hard-ignored by ESLint while still being type-checked, so the catalog build script is linted by nothing |
 | client-bundle dependency assertion | CI (post-build) | optional, after §3 Phase 4 | a `@supabase/*` import reaching the public client bundle. **Verified inert 2026-09-14**: nothing imports the packages, the env fields are `context: "server"` + `access: "secret"` (which Astro refuses to inline into client output), and the built `dist/client/` contains no match. The gate's real job is to assert that classification is *preserved*, not to catch a leak that exists |
