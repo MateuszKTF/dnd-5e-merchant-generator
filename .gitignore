@@ -26,3 +26,6 @@ pnpm-debug.log*
 
 # jetbrains setting folder
 .idea/
+
+# Coverage output (vitest --coverage, html + text reporters)
+coverage/

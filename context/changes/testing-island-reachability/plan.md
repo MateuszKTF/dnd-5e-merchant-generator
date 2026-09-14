@@ -735,11 +735,11 @@ runtime surprise. No storage schema change, so the forward-only rule is not enga
 
 #### Automated
 
-- [x] 2.1 All four pass on first run without any production change: `npm test`
-- [x] 2.2 Type checking passes: `npm run typecheck`
-- [x] 2.3 Bumping `SCHEMA_VERSION` to 2 locally leaves the frozen fixture describing v1
-- [x] 2.4 Reverting the `writeDocument` latch check to self-clearing fails the new test
-- [x] 2.5 Linting passes: `npm run lint`
+- [x] 2.1 All four pass on first run without any production change: `npm test` — c56e83c
+- [x] 2.2 Type checking passes: `npm run typecheck` — c56e83c
+- [x] 2.3 Bumping `SCHEMA_VERSION` to 2 locally leaves the frozen fixture describing v1 — c56e83c
+- [x] 2.4 Reverting the `writeDocument` latch check to self-clearing fails the new test — c56e83c
+- [x] 2.5 Linting passes: `npm run lint` — c56e83c
 
 #### Manual
 
@@ -750,13 +750,13 @@ runtime surprise. No storage schema change, so the forward-only rule is not enga
 
 #### Automated
 
-- [ ] 3.1 Node floor consistent across `.nvmrc`, `engines`, and CI
-- [ ] 3.2 Install completes with no peer warnings: `npm ci`
-- [ ] 3.3 Node project reports exactly the Phase 2 test count: `npm test -- --project node`
-- [ ] 3.4 Dom project runs the smoke test: `npm test -- --project dom`
-- [ ] 3.5 Coverage reports `src/components/*.tsx` at 0% rather than omitting them
-- [ ] 3.6 Type checking passes: `npm run typecheck`
-- [ ] 3.7 Linting passes, including the new config and setup files: `npm run lint`
+- [x] 3.1 Node floor consistent across `.nvmrc`, `engines`, and CI
+- [x] 3.2 Install completes with no peer warnings: `npm ci`
+- [x] 3.3 Node project reports exactly the Phase 2 test count: `npm test -- --project node`
+- [x] 3.4 Dom project runs the smoke test: `npm test -- --project dom`
+- [x] 3.5 Coverage reports `src/components/*.tsx` at 0% rather than omitting them
+- [x] 3.6 Type checking passes: `npm run typecheck`
+- [x] 3.7 Linting passes, including the new config and setup files: `npm run lint`
 
 #### Manual
 

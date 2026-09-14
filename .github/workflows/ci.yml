@@ -13,7 +13,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          # Follow the repo's pin rather than drifting to whatever 22.x is
+          # newest. jsdom 30 floors at ^22.22.2, so "22" resolving to an older
+          # patch would fail `npm ci` on engines with no obvious cause.
+          node-version-file: .nvmrc
           cache: npm
       - run: npm ci
       - run: npx astro sync
@@ -23,7 +26,12 @@ jobs:
       # so without this step a UI type could gain a field, be dropped silently
       # on save, and CI would stay green.
       - run: npm run typecheck
-      - run: npm test
+      # Runs both projects (node + dom). `--coverage` reports only — there is no
+      # threshold and this step does not fail on a low number. Its job is to make
+      # the untested surface visible in the log, which is the gap lessons L-05
+      # recorded: a green counter answering a different question than the one
+      # being asked. The gate comes later, with §3 Phase 4 of the test plan.
+      - run: npm test -- --coverage
       - run: npm run lint
       - run: npm run build
         env:
