@@ -5,13 +5,22 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Lets the whole suite be launched by hand from the Actions tab or
+  # `gh workflow run CI`, without inventing a commit to hang it on. Useful when
+  # a run needs repeating against unchanged code — re-running an old run checks
+  # out that run's SHA, so it cannot show current main as green.
+  workflow_dispatch:
 
 jobs:
   ci:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      # Action majors are pinned and bumped deliberately. v4 across the board
+      # was being force-run on Node 24 because it targets the deprecated
+      # Node 20 runtime; these majors target 24 natively. None of the inputs
+      # used below changed across the bump.
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           # Follow the repo's pin rather than drifting to whatever 22.x is
           # newest. jsdom 30 floors at ^22.22.2, so "22" resolving to an older
@@ -47,7 +56,7 @@ jobs:
       # Keyed on package-lock.json so the cache is invalidated exactly when the
       # @playwright/test version moves. A miss only costs the download.
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
@@ -65,7 +74,7 @@ jobs:
       # red E2E step is a stack trace and nothing else.
       - name: Upload Playwright report
         if: ${{ failure() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: playwright-report/
