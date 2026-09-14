@@ -24,50 +24,87 @@ import { describe, expect, it } from "vitest";
 /**
  * Every parked defect, why it is parked, and who owns it.
  *
- * **Currently empty, and that is the desired state.** One entry has lived here:
- * a failed promote answered `not-found`, which mapped to no condition, so no
- * storage notice rendered while the assistive announcement told the GM to read
- * one. It was parked on 2026-09-14 and graduated the same day — see
- * `MerchantGenerator.test.tsx` → "points the GM at a storage message that
- * exists", which is now an ordinary passing test.
+ * One entry has previously lived here and graduated: a failed promote answered
+ * `not-found`, which mapped to no condition, so no storage notice rendered
+ * while the assistive announcement told the GM to read one. It was parked on
+ * 2026-09-14 and fixed the same day — see `MerchantGenerator.test.tsx` →
+ * "points the GM at a storage message that exists", now an ordinary passing
+ * test.
  *
  * | # | Entry | Defect | Owner |
  * |---|-------|--------|-------|
- * | — | (none) | — | — |
+ * | 1 | `tests/e2e/critical-screen-focus.spec.ts` → "the primary action shows a focus indicator meeting the 3:1 floor" | The primary "Stwórz" button paints no usable keyboard focus indicator. The shadcn button base sets `outline-none` and substitutes `focus-visible:ring-ring/50 focus-visible:ring-[3px]`, which resolves to a transparent shadow with no spread. Measured at 1.06:1 against the 3:1 floor AGENTS.md sets. | test plan §3 Phase 4 (accessibility scope correction) |
  */
-const EXPECTED_QUARANTINE_ENTRIES = 0;
+const EXPECTED_QUARANTINE_ENTRIES = 1;
 
 const SRC = fileURLToPath(new URL(".", import.meta.url));
 
-/** This file talks *about* the marker, so it must never count itself. */
+/**
+ * The browser-level suite parks defects too, and it lives outside `src/` with a
+ * different extension and a different marker. Scanning only `src/**` would let
+ * an E2E park go unrecorded while this gate still reported a truthful-looking
+ * count — a gate that covers less than it appears to, which is exactly the
+ * L-04 shape this file exists to refuse.
+ */
+const E2E = fileURLToPath(new URL("../tests/e2e/", import.meta.url));
+
+/** This file talks *about* the markers, so it must never count itself. */
 const SELF = "quarantine.test.ts";
 
+/** Vitest parks with `it.fails(`; Playwright parks with `test.fail(`. */
 const MARKER = ["it", "fails("].join(".");
+const E2E_MARKER = ["test", "fail("].join(".");
 
-function testFilesUnder(directory: string): string[] {
+function filesUnder(directory: string, pattern: RegExp): string[] {
   const found: string[] = [];
 
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
 
     if (entry.isDirectory()) {
-      found.push(...testFilesUnder(path));
+      found.push(...filesUnder(path, pattern));
       continue;
     }
     if (entry.name === SELF) continue;
-    if (/\.test\.tsx?$/.test(entry.name)) found.push(path);
+    if (pattern.test(entry.name)) found.push(path);
   }
 
   return found;
 }
 
-function quarantineEntries(): { file: string; count: number }[] {
-  return testFilesUnder(SRC)
+function testFilesUnder(directory: string): string[] {
+  return filesUnder(directory, /\.test\.tsx?$/);
+}
+
+function e2eFilesUnder(directory: string): string[] {
+  return filesUnder(directory, /\.spec\.ts$/);
+}
+
+/**
+ * Count parks in one source file.
+ *
+ * The marker is anchored to the start of a line, so only a real call site
+ * counts. A spec that *documents* its own parking convention mentions the
+ * marker in prose — "parked with `test.fail()`, never `test.skip()`" — and a
+ * bare substring search counts those too, inflating the total and forcing the
+ * ledger number up to match comments rather than defects.
+ */
+function countIn(files: string[], root: string, marker: string): { file: string; count: number }[] {
+  return files
     .map((file) => ({
-      file: file.slice(SRC.length).replace(/\\/g, "/"),
-      count: readFileSync(file, "utf8").split(MARKER).length - 1,
+      file: file.slice(root.length).replace(/\\/g, "/"),
+      count: countCallSites(readFileSync(file, "utf8"), marker),
     }))
     .filter((entry) => entry.count > 0);
+}
+
+function countCallSites(source: string, marker: string): number {
+  const atLineStart = new RegExp(`^[ \\t]*${marker.replace(/[.()]/g, "\\$&")}`, "gm");
+  return source.match(atLineStart)?.length ?? 0;
+}
+
+function quarantineEntries(): { file: string; count: number }[] {
+  return [...countIn(testFilesUnder(SRC), SRC, MARKER), ...countIn(e2eFilesUnder(E2E), E2E, E2E_MARKER)];
 }
 
 describe("quarantined defects", () => {
@@ -96,11 +133,27 @@ describe("quarantined defects", () => {
     expect(files.filter((file) => file.endsWith(".test.tsx")).length).toBeGreaterThan(0);
     expect(files.filter((file) => file.endsWith(".test.ts")).length).toBeGreaterThan(0);
 
-    // 2. The counting logic recognises the marker when it is present. Exercised
-    //    against a synthetic source string rather than a parked defect, so the
-    //    check keeps working precisely when the ledger is empty.
-    const synthetic = `it("a", () => {});\n${MARKER}"b", () => {});\n${MARKER}"c", () => {});`;
+    // 1b. And it reaches the browser-level suite, which lives outside `src/`
+    //     under a different extension. A broken path here would silently stop
+    //     counting every E2E park while the total still looked plausible.
+    expect(e2eFilesUnder(E2E).length).toBeGreaterThan(0);
 
-    expect(synthetic.split(MARKER).length - 1).toBe(2);
+    // 2. The counting logic recognises both markers when they are present.
+    //    Exercised against synthetic source strings rather than a parked
+    //    defect, so the check keeps working when either ledger half is empty.
+    const synthetic = `it("a", () => {});\n  ${MARKER}"b", () => {});\n${MARKER}"c", () => {});`;
+
+    expect(countCallSites(synthetic, MARKER)).toBe(2);
+
+    const syntheticE2e = `test("a", () => {});\n  ${E2E_MARKER}"b", () => {});`;
+
+    expect(countCallSites(syntheticE2e, E2E_MARKER)).toBe(1);
+
+    // 3. And it does NOT count the marker in prose. Both ledger halves document
+    //    their own convention in comments, so a substring search would count
+    //    those and the number above would track comments, not defects.
+    const prose = ` * parked with \`${E2E_MARKER})\`, never \`test.skip()\` — see the ledger.`;
+
+    expect(countCallSites(prose, E2E_MARKER)).toBe(0);
   });
 });

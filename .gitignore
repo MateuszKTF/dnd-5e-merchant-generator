@@ -29,3 +29,10 @@ pnpm-debug.log*
 
 # Coverage output (vitest --coverage, html + text reporters)
 coverage/
+
+# Playwright (e2e)
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+.playwright-cli/

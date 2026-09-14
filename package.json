@@ -17,7 +17,9 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "cf:upload": "astro build && wrangler versions upload",
-    "data:build": "node scripts/build-item-catalog.mjs"
+    "data:build": "node scripts/build-item-catalog.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.8",
@@ -44,6 +46,7 @@
   "devDependencies": {
     "@eslint/compat": "^2.0.3",
     "@eslint/js": "^9.29.0",
+    "@playwright/test": "^1.63.0",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.3",

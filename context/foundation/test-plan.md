@@ -100,10 +100,10 @@ orchestrator updates Status as artifacts appear on disk.
 | # | Phase name | Goal (one line) | Risks covered | Test types | Status | Change folder |
 |---|---|---|---|---|---|---|
 | 1 | Island test reachability and save-failure reporting | Prove a failed write can never render as success — which first requires `.tsx` to be inside the runner at all | #1 (partial), #10 | runner/environment bootstrap, component, unit | complete | `context/changes/testing-island-reachability/` |
-| 2 | Persistence round-trip and lifecycle | Prove work survives a tab close, edits survive a round-trip, and promotion mints exactly one entry | #2, #3, #4 | integration round-trip, unit, mechanical invariant assertions | not started | — |
+| 2 | Persistence round-trip and lifecycle | Prove work survives a tab close, edits survive a round-trip, and promotion mints exactly one entry | #2, #3, #4 | integration round-trip, unit, mechanical invariant assertions | browser slice done; core not started | — |
 | 3 | Hostile input and schema-version resilience | Prove garbage and older documents degrade explicitly rather than silently | #5, #6 | unit with hostile and frozen per-version fixtures | not started | — |
 | 4 | Quality-gates wiring | Make the floor mechanical, so scope is visible rather than assumed | cross-cutting (locks #1–#6) | coverage reporting, runner-scope gate, bundle assertion | not started | — |
-| 5 | Critical-screen phone verification | Prove the project's only NFR holds on the screen a GM actually uses at the table | #7 | deterministic viewport check, selective multimodal review | not started | — |
+| 5 | Critical-screen phone verification | Prove the project's only NFR holds on the screen a GM actually uses at the table | #7 | deterministic viewport check, selective multimodal review | automated checks done; one defect parked | — |
 
 **Phase 1 is `complete`, and Risk #1 is closed.** The phase shipped what it
 promised — the runner reaches `.tsx`, six Risk #1 behaviours are asserted, and
@@ -117,6 +117,30 @@ phase. It was then closed test-first in the same session: the parked
 now empty, which is its desired state. Scope note: this reversed the plan's
 "What We're NOT Doing" line on island-layer defects, deliberately and with the
 owner's agreement.
+
+**Browser-level slice landed 2026-09-14 (`/10x-e2e`).** Playwright now exists,
+and it carries five tests — the only ones whose risk cannot be reached from
+jsdom. This does **not** advance Phases 2 or 5 as wholes:
+
+- **Phase 2** — its browser half is done: a cell draft typed but never blurred
+  survives a reload (the lifecycle commit path), and regenerating over
+  corrections is gated by a real `<dialog>` that Escape closes without
+  disarming the guard. Its *core* — the persist trigger, the correction merge,
+  promotion minting exactly one entry (Risk #4 is untouched) — is still Vitest
+  work and still not started.
+- **Phase 5** — the deterministic half is done: no horizontal scroll at 320px,
+  and the 44px tap floor, both regression-guarded. The multimodal review is not
+  done. **One defect is parked**: the primary "Stwórz" button paints no usable
+  keyboard focus indicator — measured at **1.06:1** against the 3:1 floor. See
+  the quarantine ledger; the fix belongs to Phase 4's a11y correction.
+
+Two findings worth carrying (both in §6.6):
+
+- The horizontal-scroll risk did **not** reproduce — the footer fits at 320px.
+  The test stands as a regression guard, verified by deliberate break.
+- Phase 1 research read the focus ring off the stylesheet as "roughly 1.3:1".
+  Measured from painted pixels it is 1.06:1, and the cause is not a low-contrast
+  ring but a ring that does not paint at all.
 
 Ordering rationale: Phase 1 is a structural blocker, not a preference —
 lessons L-05 establishes that the runner currently cannot load `.tsx` at
@@ -134,7 +158,7 @@ The classic test base for this project. AI-native tools (if any) carry a
 |---|---|---|---|
 | unit (modules) | Vitest `node` project | ^5.0.0 | The original suite, unchanged by the split: `src/**/*.test.ts`, `environment: "node"`. A mutation audit killed 21 of 23 planted mutants, so depth here is genuine |
 | component / island rendering | Vitest `dom` project + jsdom + Testing Library | jsdom ^30, @testing-library/react ^16.3 | Landed in §3 Phase 1. `src/**/*.test.tsx`, `environment: "jsdom"`, setup in `vitest.setup.dom.ts`. The two globs are disjoint, so the split needed no edit to any existing test. **jsdom cannot honestly exercise**: the `storage` event, `<dialog>` modal semantics, `pagehide`/`visibilitychange`, or colour contrast |
-| e2e | none yet — see §3 Phase 5, if justified | — | Not assumed. The product is one prerendered view with browser-local state; whether e2e earns its cost is a Phase 5 decision, not a foregone conclusion |
+| e2e | Playwright | @playwright/test ^1.63, Chromium only | Landed 2026-09-14 for the browser-level slice only. `tests/e2e/*.spec.ts`, two projects: `desktop-chromium` and `phone` (320px, matching `phone-*.spec.ts`). Config starts `npm run dev` itself. **Deliberately tiny** — it carries only what §6.2 lists as things jsdom cannot do honestly. Levers: `tests/e2e/seed.spec.ts` + `tests/e2e/E2E_RULES.md` |
 | type checking | `astro check` | via @astrojs/check ^0.9 | Covers **all** 36 project files including every `.tsx`. The one gate with full file coverage, and the only thing that sees the compile-time type assertions |
 | linting | ESLint, type-aware | ^9.29 | Covers `.tsx` too — 212 active rules with `projectService` on. `scripts/**` is hard-ignored |
 | accessibility | ESLint astro jsx-a11y | via eslint-plugin-astro ^1.7.0 | **Inert over React, not merely narrow.** The 31 `astro/jsx-a11y/*` rules *are* configured for `.tsx` at error severity, and every one returns an empty visitor on a non-Astro file. `eslint-plugin-jsx-a11y` is installed but never registered for React. Correction belongs to §3 Phase 4 |
@@ -169,7 +193,8 @@ phase lands; before that, the gate is planned.
 | unit (modules) | local + CI | required | logic regressions in `src/lib/` |
 | component / island tests | local + CI | required, since §3 Phase 1 | save-failure reporting regressions — the layer that had no automated check of any kind before |
 | coverage reporting | CI | report-only since §3 Phase 1; threshold after §3 Phase 4 | the lessons L-04 and L-05 class of failure: a green counter answering a different question than the one being asked |
-| quarantine ledger | local + CI | required, since §3 Phase 1 | a known defect being parked without being written down, or staying parked after it is fixed |
+| quarantine ledger | local + CI | required, since §3 Phase 1 | a known defect being parked without being written down, or staying parked after it is fixed. **Extended 2026-09-14** to scan `tests/e2e/**` for `test.fail(` as well as `src/**` for `it.fails(` — otherwise an E2E park would go unrecorded while the count still looked truthful. Both counts are line-anchored, so a spec documenting its own convention in prose is not counted as a defect |
+| e2e (browser-level) | local + CI | required, since the §3 Phase 5 slice | the five behaviours jsdom cannot exercise honestly (§6.2). Runs `npm run test:e2e`; needs Chromium installed (`npx playwright install chromium`) and starts the dev server itself |
 | lint warning budget | CI | required after §3 Phase 4 | `eslint .` carries no `--max-warnings`, so every warn-level rule — `no-console` among them — passes CI silently today |
 | `scripts/**` lint coverage | CI | required after §3 Phase 4 | `scripts/**` is hard-ignored by ESLint while still being type-checked, so the catalog build script is linted by nothing |
 | client-bundle dependency assertion | CI (post-build) | optional, after §3 Phase 4 | a `@supabase/*` import reaching the public client bundle. **Verified inert 2026-09-14**: nothing imports the packages, the env fields are `context: "server"` + `access: "secret"` (which Astro refuses to inline into client output), and the built `dist/client/` contains no match. The gate's real job is to assert that classification is *preserved*, not to catch a leak that exists |
@@ -259,11 +284,42 @@ the relevant rollout phase ships; before that, the sub-section reads
   hand rather than by the serializer under test, and frozen per-version
   documents that are never regenerated (Risk #5, #6).
 
-### 6.6 Adding a phone-readability check for a new screen
+### 6.6 Adding a browser-level (E2E) test
 
-- TBD — see §3 Phase 5. Pattern to name once shipped: deterministic
-  viewport and target-size assertions first, multimodal review only for what
-  those cannot express (Risk #7).
+- **Read `tests/e2e/E2E_RULES.md` first.** It and `tests/e2e/seed.spec.ts` are
+  the two levers; the rules file carries the admission test for this layer.
+- **Location / naming**: `tests/e2e/<feature>.spec.ts`. A `phone-` prefix routes
+  the file to the 320px `phone` project; everything else runs desktop.
+- **Run locally**: `npm run test:e2e`, or `npm run test:e2e -- <path>` for one
+  spec. The config starts the dev server itself.
+- **Admission test — most tests do not belong here.** A test earns a place only
+  if it needs something jsdom cannot do honestly (§6.2): the `storage` event,
+  real `<dialog>` semantics, `pagehide`/`visibilitychange`, colour contrast, or
+  real layout geometry. Everything else is cheaper and steadier in Vitest.
+- **Always enter through `gotoHydrated()`.** The island is `client:load` and
+  Astro server-renders its markup, so every control is present and clickable
+  *before* React attaches handlers. A click in that window is swallowed in
+  silence. Waiting on `astro-island:not([ssr])` is a real state, not a timeout —
+  this was the single biggest flake source found while building the suite.
+- **Mandatory before claiming coverage: break the thing on purpose.** Invert the
+  production behaviour the risk names, confirm the test goes red, revert. Every
+  test in this suite has been through it, and two were rewritten because of it:
+  - a premise guard read the corrected price from `rows`, but corrections are an
+    *overlay* (`transient.corrections[itemId]`) and never touch `rows` — so the
+    guard reported "uncommitted" either way. Decorative, and green (`[[L-03]]`).
+  - the `pagehide` test survives removing the `pagehide` listener, because
+    Chromium also fires `visibilitychange` on navigation. It covers the commit
+    *path*, not one listener, and now says so rather than overclaiming.
+- **Prefer painted pixels to computed styles for anything visual.** A computed
+  style reports `outline-width: 2px` for a control painting nothing, because
+  `outline-style: none` still carries a width — a style-based assertion accepts
+  a fix that fixes nothing. `tests/e2e/helpers/focus-contrast.ts` compares the
+  focused and unfocused states pixel-for-pixel, which is WCAG 2.4.11's own
+  definition and has no stored baseline to churn. That is the line between this
+  and the pixel-snapshot anti-pattern: state-versus-state, never a golden image.
+- **Parking**: `test.fail()`, never `test.skip()` — the Playwright spelling of
+  §6.3. `src/quarantine.test.ts` scans this directory too, so a parked E2E
+  defect must be added to the ledger and the count bumped.
 
 ### 6.7 Per-rollout-phase notes
 
@@ -316,8 +372,8 @@ these unless the underlying assumption changes.
 
 ## 8. Freshness Ledger
 
-- Strategy (§1–§5) last reviewed: 2026-09-14 (corrected against rollout Phase 1 research the same day)
-- Stack versions last verified: 2026-09-14 (jsdom 30, @testing-library/react 16.3, @vitest/coverage-v8 5.0.0 installed and running)
+- Strategy (§1–§5) last reviewed: 2026-09-14 (corrected against rollout Phase 1 research, then against the `/10x-e2e` browser slice, the same day)
+- Stack versions last verified: 2026-09-14 (jsdom 30, @testing-library/react 16.3, @vitest/coverage-v8 5.0.0, @playwright/test 1.63 + Chromium installed and running)
 - AI-native tool references last verified: 2026-09-14
 
 Refresh (`/10x-test-plan --refresh`) when:
