@@ -116,7 +116,7 @@ ręcznie.
 
 **Data:** 2026-09-14 · **Wyszło z:** audytu warstwy zapisu (`storage-layer-consistency-audit`)
 
-**Obserwacja.** `npm test` raportuje `7 passed (7)`, `366 passed (366)` i jest to prawda.
+**Obserwacja.** `npm test` raportuje `7 passed (7)`, `366 passed (366)` i jest to prawda. (Licznik poprawiony 2026-09-14: było ich wtedy **368**, nie 366 — dwa testy doszły po audycie.)
 Audyt mutacyjny potwierdził, że ten zestaw jest naprawdę mocny: **21 z 23 zasadzonych mutantów
 zginęło**, a żaden z sześciu testów ścieżek awaryjnych magazynu nie okazał się pusty.
 
@@ -152,3 +152,41 @@ więc pod mutacją został zielony. Deklaracja w komentarzu nie jest asercją.
 w tym repo jest ich dziewięć trzymanych wyłącznie prozą, przy dokładnie jednym egzekwowanym
 mechanicznie (asercja `MutuallyAssignable` w `merchant.test.ts`). Pełna lista z `file:line`:
 `context/changes/storage-layer-consistency-audit/research.md`, ustalenia F5–F11.
+
+---
+
+## L-06: Kontrola wyrównawcza, której nigdy nie wykonano, nie jest kontrolą
+
+**Data:** 2026-09-14 · **Wyszło z:** rolloutu testów, faza 1 (`testing-island-reachability`)
+
+**Obserwacja.** `vitest.config.ts` od początku deklarował, czym jest uzasadniony brak
+testów wysp Reacta: _„the React islands are covered by the manual verification steps in
+the plan, not by this runner"_. To zdanie zostało powtórzone w **sześciu** kolejnych
+planach — F-01, S-02, S-03, S-04, `corrections-autosave`, audyt warstwy zapisu — więc
+przestało wyglądać na lukę, a zaczęło na świadomą decyzję z kontrolą wyrównawczą.
+
+Kontrola nie istniała. W trzech z ośmiu folderów zmian **ani jeden manualny wiersz nie
+został odhaczony** — łącznie około 40 kryteriów, w tym wszystkie przeglądarkowe testy
+ścieżek awaryjnych z `merchant-storage-contract`, o których ten sam plan pisze, że są
+_„The half of this slice that justifies its existence"_.
+
+Efekt: warstwa `.tsx` była pokryta wyłącznie typecheckiem i lintem bez reguł a11y.
+Pierwszy błąd, który znalazł tam automat po podpięciu jsdom, był **behawioralny** —
+nieudany zapis nie renderuje żadnego komunikatu, a czytnik ekranu każe użytkownikowi
+przeczytać komunikat, którego nie ma. Żaden kompilator ani linter nigdy by tego nie
+zobaczył.
+
+**Reguła.** Kiedy plan uzasadnia brak bramki istnieniem kontroli wyrównawczej —
+weryfikacji manualnej, przeglądu, „sprawdzimy to ręcznie" — kontrola jest **zobowiązaniem
+do wykonania, nie do zapisania**. Zanim powołasz się na nią w kolejnym planie, sprawdź
+w poprzednim, czy jej wiersze są odhaczone. Niewykonana kontrola jest gorsza niż jej brak,
+bo brak widać.
+
+Praktyczna konsekwencja: jeśli kontrola wyrównawcza powtarza się w trzecim planie z rzędu,
+to nie jest kontrola — to jest dług, który właśnie dostał trzecią pieczątkę. Zamień ją na
+bramkę albo nazwij długiem wprost.
+
+**Applies to:** każde zdanie w planie w postaci „to jest pokryte przez weryfikację manualną"
+/ „sprawdzimy przy review" / „wystarczy smoke test". Por. `[[L-04]]` (bramka bez zasięgu)
+i `[[L-05]]` (licznik zamiast pokrycia) — to ta sama rodzina błędu: **deklaracja przyjęta
+jako dowód**. Tu deklaracja była szczera i nadal nic nie znaczyła.

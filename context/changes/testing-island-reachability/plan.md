@@ -768,11 +768,11 @@ runtime surprise. No storage schema change, so the forward-only rule is not enga
 
 #### Automated
 
-- [x] 4.1 Four asserted behaviors pass: `npm test -- --project dom`
-- [x] 4.2 Three quarantined entries pass as `it.fails()`, each failing for its documented reason
-- [x] 4.3 The quarantine gate passes, and fails when a fourth entry is added
-- [x] 4.4 Coverage for `src/components/MerchantGenerator.tsx` is above 0%
-- [x] 4.5 Full suite, typecheck and lint pass
+- [x] 4.1 Four asserted behaviors pass: `npm test -- --project dom` — 4914383
+- [x] 4.2 Three quarantined entries pass as `it.fails()`, each failing for its documented reason — 4914383
+- [x] 4.3 The quarantine gate passes, and fails when a fourth entry is added — 4914383
+- [x] 4.4 Coverage for `src/components/MerchantGenerator.tsx` is above 0% — 4914383
+- [x] 4.5 Full suite, typecheck and lint pass — 4914383
 
 #### Manual
 
@@ -784,9 +784,9 @@ runtime surprise. No storage schema change, so the forward-only rule is not enga
 
 #### Automated
 
-- [ ] 5.1 `test-plan.md` §3 row 1 reads `complete`
-- [ ] 5.2 No `file:line` anchor appears anywhere in §2
-- [ ] 5.3 Markdown formatting passes: `npm run lint`
+- [x] 5.1 `test-plan.md` §3 row 1 reads `complete`
+- [x] 5.2 No `file:line` anchor appears anywhere in §2
+- [x] 5.3 Markdown formatting passes: `npm run lint`
 
 #### Manual
 

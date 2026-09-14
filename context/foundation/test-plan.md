@@ -46,21 +46,45 @@ research's job, see §1 principle #3).
 | 2 | The last generated merchant is not auto-persisted on the path that matters; the GM closes the tab mid-session and reopens to stale or empty state | High | High | interview Q2 (already burned here); PRD US-03, FR-009; roadmap S-03; hot-spot dirs `src/lib/` — 54 touches/30d, `src/components/` — 42 touches/30d |
 | 3 | Manual price/quantity corrections are lost or corrupted — across a save/reload round-trip, or discarded by a regenerate whose confirmation guard misses a case | High | High | interview Q2 (already burned here); PRD FR-006, FR-008, US-02 acceptance criteria; roadmap S-02 (names FR-008 the most expensive element of v1) |
 | 4 | The transient↔standing lifecycle goes wrong: promotion duplicates a library entry, a standing merchant silently reverts to episodic, or the library link is lost after promotion | High | High | interview Q3; roadmap S-03 Unknown (explicitly warns the S-04 list may receive duplicates); lessons L-05; hot-spot dir `src/lib/` — 54 touches/30d |
-| 5 | An untrusted stored document — malformed, truncated, hand-edited, or written by another application on the same origin — is read and either throws uncaught (blank application) or is discarded silently | High | Medium | abuse lens (untrusted input); AGENTS.md hard rule (expected failure returns a discriminated union, never throws); PRD §Success Criteria Guardrails; interview Q1 |
+| 5 | An untrusted stored document — malformed, truncated, hand-edited, or written by another application on the same origin — is read and silently discarded, so the GM's merchants vanish with nothing said | High | Low | abuse lens (untrusted input); AGENTS.md hard rule (expected failure returns a discriminated union, never throws); PRD §Success Criteria Guardrails; interview Q1 |
 | 6 | A storage schema change ships and a device holding the other format loses its merchants; a Worker rollback reverts code and assets but not the GM's browser storage | High | Medium | AGENTS.md hard rule (browser-storage schema changes are forward-only; rollback asymmetry); PRD §Success Criteria Guardrails; roadmap F-01 |
-| 7 | The assortment table is unusable on a phone at the table — tap targets under 44px, horizontal scrolling, or a control that fails the contrast floor | Medium | Medium | PRD §Non-Functional Requirements (the only NFR); AGENTS.md §Style (44px targets, WCAG AA floors); lessons L-04 (the a11y gate has zero file scope over React islands) |
+| 7 | A GM cannot see which control they are on, or the page scrolls sideways on a phone at the table | Medium | Medium | PRD §Non-Functional Requirements (the only NFR); AGENTS.md §Style (WCAG AA contrast floors); lessons L-04 (the a11y rules are configured for React files and return an empty visitor on them, so nothing is enforced) |
+| 8 | Two tabs on one device: the second replaces the first's merchant and its entire correction overlay with no confirmation, and cancels a confirmation the GM is mid-answer on | High | Medium | rollout Phase 1 research; `manual-item-corrections` plan (the cross-tab path is a recorded carve-out from "every path is guarded"); PRD FR-006 |
+| 9 | The documented compensating control for untested islands — manual verification steps in each plan — is credited but not performed, so a layer believed to be checked is checked by nothing | High | High | rollout Phase 1 research; unticked manual criteria across three archived change folders; lessons L-04, L-05 |
+| 10 | A notice reporting an irreversible loss is classified as episodic and erased by the GM's own next successful write, turning a reported loss into a silent one | High | Medium | rollout Phase 1 research; PRD §Success Criteria Guardrails |
 
 High-impact × Low-likelihood scenarios were deliberately not padded into
 this map. One was identified — a Supabase credential reaching the public
 client bundle — and it is handled as a build-time gate in §5 rather than as
 a test, which is both the cheaper and the more reliable response.
 
+**Corrections backported from rollout Phase 1 research (2026-09-14).** Risks
+#1–#7 were written before any of this code had been read. Three rows were
+wrong and are corrected above; the evidence is in
+`context/changes/testing-island-reachability/research.md`.
+
+- **Risk #5 was over-stated.** There is no uncaught-throw path at the read or
+  parse boundary — every hazard is guarded and the storage modules contain no
+  `throw` at all. Only the silent-discard half survives, and it is the
+  best-covered risk on this map. Likelihood lowered High → Low.
+- **Risk #7's premise was wrong.** Tap targets are enforced on every
+  interactive control. The real defect is that the primary buttons remove the
+  browser's focus ring and replace it with one at roughly 1.3:1, well under the
+  3:1 floor. The horizontal-scroll risk is the footer, not the table. And the
+  a11y gate is not narrowly scoped, it is **inert**: the rules are configured
+  for React files and return an empty visitor on them.
+- **Risk #6 stands, and its anti-pattern was already present.** Every version
+  fixture was computed from the schema constant, so all of them would have
+  moved the day it did. A frozen fixture now exists; the migration seam is
+  still a comment with no runner behind it.
+- **Risks #8–#10 are new**, appended rather than renumbered.
+
 ### Risk Response Guidance
 
 | Risk | What would prove protection | Must challenge | Context `/10x-research` must ground | Likely cheapest layer | Anti-pattern to avoid |
 |---|---|---|---|---|---|
-| #1 | A failed write never renders as a success, and the GM sees an explicit notice that distinguishes one failure kind from another | "The write returned, therefore it saved" — and "the storage module is tested, therefore the reporting is" (lessons L-05) | How storage outcomes are modelled, which outcomes exist, where the outcome is translated into user-facing text, and whether that translation is reachable by the runner at all | Integration across the storage module and the island, once `.tsx` is reachable by the runner | Asserting the message string copied out of the component under test — the oracle must come from the PRD guardrail, not from the code |
-| #2 | Closing and reopening restores the last merchant including edits made seconds earlier, with no explicit user action | "Autosave is wired, therefore it fires" — which trigger actually commits, and whether an edit counts as one | The persist trigger and its lifecycle, any debounce or coalescing, and what a mount-time restore actually reads | Integration round-trip: write, then re-read as a fresh mount | Exercising the persist function directly while never exercising the trigger — lessons L-03 is exactly this failure |
+| #1 | A failed write never renders as a success, and the GM sees an explicit notice that distinguishes one failure kind from another | "The write returned, therefore it saved" — and "the storage module is tested, therefore the reporting is" (lessons L-05) | How storage outcomes are modelled, which outcomes exist, where the outcome is translated into user-facing text, and whether that translation is reachable by the runner at all | Component test in the `dom` project — the mapping is a pure function of props, so integration buys nothing extra | Asserting the message string copied out of the component under test — the oracle must come from the PRD guardrail, not from the code. Assert instead that *something* is said and that different failures say different things |
+| #2 | Closing and reopening restores the last merchant including edits made seconds earlier, with no explicit user action | "Autosave is wired, therefore it fires" — which trigger actually commits, and whether an edit counts as one | The persist trigger and its lifecycle, and what a mount-time restore actually reads. (There is no debounce — persistence is imperative from event handlers only. The real loss window is a cell draft that was typed but never committed, on a phone whose OS kills the tab.) | Integration round-trip: write, then re-read as a fresh mount | Exercising the persist function directly while never exercising the trigger — lessons L-03 is exactly this failure |
 | #3 | An edited price or quantity survives a round-trip unchanged, and a regenerate with corrections present cannot proceed unconfirmed | "Editing the cell updated the model" and "a confirmation exists, therefore it covers every path" | Where an edit is committed versus held in transient state, and how the confirmation guard decides that corrections exist | Unit for the correction merge, integration for the guard path | Over-mocking the dialog so the guard's actual condition is never evaluated |
 | #4 | Promotion produces exactly one library entry, identity stays stable across it, and a standing merchant never silently becomes episodic | "Promotion was called, therefore it minted" — the storage audit already found an assertion that never invoked the function it claimed to guard | The identity and relink rule, the standing-versus-episodic policy, and any ordering guarantee between session state and library state | Unit on the lifecycle rule, plus a mechanically enforced cross-module invariant assertion | Constructing both sides of the comparison from literals so the function under test never runs (lessons L-05, verbatim precedent) |
 | #5 | A garbage, truncated, or foreign document yields a clean explicit outcome — never an uncaught throw, never a silent empty state | "Only our code ever writes this key" | The read and parse boundary, and which failures are expected outcomes versus broken invariants under the AGENTS.md union-versus-throw rule | Unit with hostile fixtures | Generating fixtures with the same serializer that is under test — they can only prove self-consistency |
@@ -75,11 +99,19 @@ orchestrator updates Status as artifacts appear on disk.
 
 | # | Phase name | Goal (one line) | Risks covered | Test types | Status | Change folder |
 |---|---|---|---|---|---|---|
-| 1 | Island test reachability and save-failure reporting | Prove a failed write can never render as success — which first requires `.tsx` to be inside the runner at all | #1 | runner/environment bootstrap, component, integration | planned | `context/changes/testing-island-reachability/` |
+| 1 | Island test reachability and save-failure reporting | Prove a failed write can never render as success — which first requires `.tsx` to be inside the runner at all | #1 (partial), #10 | runner/environment bootstrap, component, unit | complete | `context/changes/testing-island-reachability/` |
 | 2 | Persistence round-trip and lifecycle | Prove work survives a tab close, edits survive a round-trip, and promotion mints exactly one entry | #2, #3, #4 | integration round-trip, unit, mechanical invariant assertions | not started | — |
 | 3 | Hostile input and schema-version resilience | Prove garbage and older documents degrade explicitly rather than silently | #5, #6 | unit with hostile and frozen per-version fixtures | not started | — |
 | 4 | Quality-gates wiring | Make the floor mechanical, so scope is visible rather than assumed | cross-cutting (locks #1–#6) | coverage reporting, runner-scope gate, bundle assertion | not started | — |
 | 5 | Critical-screen phone verification | Prove the project's only NFR holds on the screen a GM actually uses at the table | #7 | deterministic viewport check, selective multimodal review | not started | — |
+
+**Phase 1 is `complete`; Risk #1 is not closed.** The phase shipped what it
+promised — the runner reaches `.tsx`, five Risk #1 behaviours are asserted, and
+four unrelated live defects were fixed along the way. One Risk #1 defect remains
+open and is parked in the quarantine ledger: a failed promote answers
+`not-found`, renders no notice, and leaves the assistive announcement pointing
+at a message that was never shown. `complete` here means the rollout phase
+finished, not that the risk it attacked is gone.
 
 Ordering rationale: Phase 1 is a structural blocker, not a preference —
 lessons L-05 establishes that the runner currently cannot load `.tsx` at
@@ -95,11 +127,13 @@ The classic test base for this project. AI-native tools (if any) carry a
 
 | Layer | Tool | Version | Notes |
 |---|---|---|---|
-| unit + integration (modules) | Vitest | ^5.0.0 | Configured and in real use: 7 test files, 366 tests, all under `src/lib/`. A mutation audit killed 21 of 23 planted mutants, so depth here is genuine |
-| component / island rendering | none yet — see §3 Phase 1 | — | The runner is pinned to `environment: "node"` and a `.test.ts` glob, so `.tsx` is excluded by configuration rather than by omission. Phase 1 decides between a jsdom harness and Vitest Browser Mode |
+| unit (modules) | Vitest `node` project | ^5.0.0 | The original suite, unchanged by the split: `src/**/*.test.ts`, `environment: "node"`. A mutation audit killed 21 of 23 planted mutants, so depth here is genuine |
+| component / island rendering | Vitest `dom` project + jsdom + Testing Library | jsdom ^30, @testing-library/react ^16.3 | Landed in §3 Phase 1. `src/**/*.test.tsx`, `environment: "jsdom"`, setup in `vitest.setup.dom.ts`. The two globs are disjoint, so the split needed no edit to any existing test. **jsdom cannot honestly exercise**: the `storage` event, `<dialog>` modal semantics, `pagehide`/`visibilitychange`, or colour contrast |
 | e2e | none yet — see §3 Phase 5, if justified | — | Not assumed. The product is one prerendered view with browser-local state; whether e2e earns its cost is a Phase 5 decision, not a foregone conclusion |
-| accessibility | ESLint astro jsx-a11y | via eslint-plugin-astro ^1.7.0 | Present but scoped to `.astro` only, so it covers none of the React interface (lessons L-04). Scope correction belongs to §3 Phase 4 |
-| coverage reporting | none yet — see §3 Phase 4 | — | No `coverage` key exists in the runner config or the manifest, which is precisely why the `.tsx` gap went unnoticed (lessons L-05) |
+| type checking | `astro check` | via @astrojs/check ^0.9 | Covers **all** 36 project files including every `.tsx`. The one gate with full file coverage, and the only thing that sees the compile-time type assertions |
+| linting | ESLint, type-aware | ^9.29 | Covers `.tsx` too — 212 active rules with `projectService` on. `scripts/**` is hard-ignored |
+| accessibility | ESLint astro jsx-a11y | via eslint-plugin-astro ^1.7.0 | **Inert over React, not merely narrow.** The 31 `astro/jsx-a11y/*` rules *are* configured for `.tsx` at error severity, and every one returns an empty visitor on a non-Astro file. `eslint-plugin-jsx-a11y` is installed but never registered for React. Correction belongs to §3 Phase 4 |
+| coverage reporting | @vitest/coverage-v8 | 5.0.0 | Landed in §3 Phase 1, root-level (Vitest rejects `coverage` inside a project) with `include` so untested files report 0% instead of vanishing. Report-only — no threshold until §3 Phase 4 |
 | (optional) AI-native | multimodal review of critical screens via the session browser tool — checked: 2026-09-14 | n/a | When NOT to use: any regression a deterministic viewport or contrast assertion already catches, and any screen that is not one of the one or two a GM uses at the table |
 
 **Stack grounding tools (current session):**
@@ -107,6 +141,15 @@ The classic test base for this project. AI-native tools (if any) carry a
 - Search: built-in web search — confirmed Vitest Browser Mode is stable from v4 onward and that an Astro island hydration helper for it exists, so Phase 1 has a current option beyond jsdom; checked: 2026-09-14
 - Runtime/browser: session Chrome automation tool — available, and already proven in this repo for manual verification of the previous change; candidate for §3 Phase 5, not used before then; checked: 2026-09-14
 - Provider/platform: none — the configured Linear server failed to connect this session; no GitHub, Cloudflare, or Supabase tooling was exposed; checked: 2026-09-14
+
+**Corrected 2026-09-14 (rollout Phase 1 research).** An earlier draft of this
+section implied the islands were ungated. They were never ungated — they were
+**untested**. Linting covers `.tsx` with type-aware rules, and `astro check`
+type-checks every one of them. What was missing was tests and any a11y rule
+with real effect. The distinction matters: it is why the first island bug this
+rollout found was a *behavioural* one that no linter or compiler could ever
+have seen. Counts in the earlier draft were also stale (366 tests, 2 979 dark
+lines); at the start of this phase they were 368 and 3 068.
 
 ## 5. Quality Gates
 
@@ -117,13 +160,15 @@ phase lands; before that, the gate is planned.
 | Gate | Where | Required? | Catches |
 |---|---|---|---|
 | lint | local (pre-commit) + CI | required | style and rule drift; a non-zero exit is a real failure |
-| typecheck | CI | required | type drift the runner cannot see, since Vitest transpiles without type-checking |
-| unit + integration (modules) | local + CI | required | logic regressions in `src/lib/` |
-| component / island tests | local + CI | required after §3 Phase 1 | save-failure reporting and mount-time restore regressions |
-| coverage reporting | CI | required after §3 Phase 4 | the lessons L-04 and L-05 class of failure: a gate whose file scope silently covers nothing |
-| runner-scope assertion | CI | required after §3 Phase 4 | a future config change that quietly drops a file type from the runner again |
-| client-bundle dependency assertion | CI (post-build) | required after §3 Phase 4 | a `@supabase/*` import reaching the public client bundle, which would publish a credential from a public repo and a public Worker |
-| accessibility scope correction | local + CI | required after §3 Phase 4 | interface-level a11y violations that the `.astro`-scoped rule set can never see |
+| typecheck | CI | required | type drift the runner cannot see, since Vitest transpiles without type-checking. Must stay **ahead of** the test step: the compile-time type assertions are invisible to Vitest |
+| unit (modules) | local + CI | required | logic regressions in `src/lib/` |
+| component / island tests | local + CI | required, since §3 Phase 1 | save-failure reporting regressions — the layer that had no automated check of any kind before |
+| coverage reporting | CI | report-only since §3 Phase 1; threshold after §3 Phase 4 | the lessons L-04 and L-05 class of failure: a green counter answering a different question than the one being asked |
+| quarantine ledger | local + CI | required, since §3 Phase 1 | a known defect being parked without being written down, or staying parked after it is fixed |
+| lint warning budget | CI | required after §3 Phase 4 | `eslint .` carries no `--max-warnings`, so every warn-level rule — `no-console` among them — passes CI silently today |
+| `scripts/**` lint coverage | CI | required after §3 Phase 4 | `scripts/**` is hard-ignored by ESLint while still being type-checked, so the catalog build script is linted by nothing |
+| client-bundle dependency assertion | CI (post-build) | optional, after §3 Phase 4 | a `@supabase/*` import reaching the public client bundle. **Verified inert 2026-09-14**: nothing imports the packages, the env fields are `context: "server"` + `access: "secret"` (which Astro refuses to inline into client output), and the built `dist/client/` contains no match. The gate's real job is to assert that classification is *preserved*, not to catch a leak that exists |
+| accessibility scope correction | local + CI | required after §3 Phase 4 | interface-level a11y violations. The existing rules are configured for React files and return an empty visitor on them, so the gate is inert rather than narrow — a stronger reason to fix it than the earlier draft implied |
 | deterministic viewport check | CI on PR | optional, after §3 Phase 5 | phone-readability regressions against the project's only NFR |
 | multimodal visual review | on demand | optional, after §3 Phase 5 | visual issues on one or two critical screens that a deterministic check misses |
 | build | CI | required | build-time breakage before promotion |
@@ -150,33 +195,85 @@ the relevant rollout phase ships; before that, the sub-section reads
 
 ### 6.2 Adding a component / island test
 
-- TBD — see §3 Phase 1. This phase decides the harness (jsdom versus
-  Browser Mode), the file glob, and the naming convention, and must record
-  all three here. Pattern to name once shipped: proving a failed write never
-  renders as a success (Risk #1).
+- **Location**: beside the component, `src/components/<Component>.test.tsx`.
+- **Naming**: `.test.tsx` is the whole mechanism. The runner has two projects
+  over disjoint globs — `node` collects `src/**/*.test.ts`, `dom` collects
+  `src/**/*.test.tsx` — so the extension alone decides the environment. Nothing
+  else needs configuring.
+- **Run locally**: `npm test -- --project dom` (or `npm test` for both).
+- **Harness**: jsdom with Testing Library. Setup lives in `vitest.setup.dom.ts`
+  and applies to the `dom` project only.
+- **Reference tests**: `src/components/MerchantGenerator.test.tsx` for behaviour
+  against a failing store; `src/components/StorageNotice.test.tsx` for a plain
+  render.
+- **Driving storage**: the components call `readDocument()` / `putTransient()`
+  with no argument, so there is no injection seam. Spy on `Storage.prototype`
+  — `setItem` throwing a `QuotaExceededError` or `SecurityError` `DOMException`,
+  or succeeding and storing nothing to model a store that drops writes. Call
+  `resetReadOnlyLatch()` in `beforeEach`: the latch is module state and Vitest
+  isolates per file, not per test.
+- **Assert the requirement, not the copy.** Do not compare against message
+  strings from `StorageNotice` — that is green for any wording, including
+  wording that says the opposite. Assert that *something* is said, and that
+  different failures say *different* things.
+- **What jsdom cannot do honestly**, and must not be claimed: the `storage`
+  event never fires (it only reaches other windows, and there is one);
+  `HTMLDialogElement` is unimplemented, so the setup file's stub gives you
+  `open` and nothing else — no focus trap, no Escape, no backdrop;
+  `pagehide`/`visibilitychange` never fire on their own; and colour contrast
+  needs a paint engine. All four are §3 Phase 5 work, in a real browser.
 
-### 6.3 Adding a persistence round-trip test
+### 6.3 Parking a known defect
+
+- **Mechanism**: `it.fails()`, never `it.skip()`. A skipped test does not
+  execute and rots silently — the failure mode in `[[L-03]]` and `[[L-05]]`.
+  `it.fails()` runs its assertion, keeps the suite green while the defect
+  stands, and turns red the moment the defect is fixed, so the entry has to be
+  retired rather than forgotten.
+- **Ledger**: every entry is listed in `src/quarantine.test.ts` with its defect
+  and its owning change, and the count is pinned there. Adding one means
+  editing that number deliberately.
+- **Write the assertion for the requirement, then park it.** Never weaken an
+  assertion so it passes against the defect.
+
+### 6.4 Adding a persistence round-trip test
 
 - TBD — see §3 Phase 2. Pattern to name once shipped: writing through the
   real trigger, then re-reading as a fresh mount, so the test cannot pass
   by calling the persist function the application never calls (Risk #2, #3).
 
-### 6.4 Adding a hostile-input or schema-version test
+### 6.5 Adding a hostile-input or schema-version test
 
 - TBD — see §3 Phase 3. Pattern to name once shipped: fixtures authored by
   hand rather than by the serializer under test, and frozen per-version
   documents that are never regenerated (Risk #5, #6).
 
-### 6.5 Adding a phone-readability check for a new screen
+### 6.6 Adding a phone-readability check for a new screen
 
 - TBD — see §3 Phase 5. Pattern to name once shipped: deterministic
   viewport and target-size assertions first, multimodal review only for what
   those cannot express (Risk #7).
 
-### 6.6 Per-rollout-phase notes
+### 6.7 Per-rollout-phase notes
 
-(Empty. After each phase lands, `/10x-implement` appends a short note here
-capturing anything surprising the rollout phase taught.)
+**Phase 1 (`testing-island-reachability`), 2026-09-14.** Three things worth
+carrying forward:
+
+1. **Two of the three predicted defects were already fixed.** The research doc
+   carried a stale claim forward from an older audit. Writing the assertions as
+   ordinary tests first, and converting only what actually failed, is what
+   caught it — parking them as `it.fails()` up front would have produced two
+   entries that fail because they *pass*.
+2. **A test can pass for the wrong reason and look thorough doing it.** The
+   first version of the `not-found` test asserted that the notice text
+   *changed*, and went green over a live defect. The requirement is not that
+   something changed; it is that an instruction the product gives the GM can be
+   followed. Assert the requirement, never a proxy for it.
+3. **Check a fixture's premise.** A fallback-category test used a category that
+   turned out to be a real one, so it never entered the branch it named — the
+   `[[L-03]]` shape again. Both that test and the frozen-fixture test now carry
+   an explicit premise-guard assertion, which is cheap and catches the whole
+   class.
 
 ## 7. What We Deliberately Don't Test
 
@@ -208,8 +305,8 @@ these unless the underlying assumption changes.
 
 ## 8. Freshness Ledger
 
-- Strategy (§1–§5) last reviewed: 2026-09-14
-- Stack versions last verified: 2026-09-14
+- Strategy (§1–§5) last reviewed: 2026-09-14 (corrected against rollout Phase 1 research the same day)
+- Stack versions last verified: 2026-09-14 (jsdom 30, @testing-library/react 16.3, @vitest/coverage-v8 5.0.0 installed and running)
 - AI-native tool references last verified: 2026-09-14
 
 Refresh (`/10x-test-plan --refresh`) when:
