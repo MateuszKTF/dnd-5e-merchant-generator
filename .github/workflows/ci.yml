@@ -37,3 +37,36 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+
+      # E2E runs last on purpose: it is by far the most expensive step, so every
+      # cheaper gate above should have a chance to fail first. Nothing below
+      # depends on the build output — Playwright starts its own dev server — but
+      # spending three minutes on browsers to then fail on a broken build is
+      # waste, not thoroughness.
+      #
+      # Keyed on package-lock.json so the cache is invalidated exactly when the
+      # @playwright/test version moves. A miss only costs the download.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+      # `--with-deps` installs the system libraries Chromium needs on a bare
+      # runner; it is cheap and runs whether or not the browser itself was
+      # cached. Chromium only — the suite declares no other browser, and
+      # installing three would triple the slowest step for no extra signal.
+      - run: npx playwright install --with-deps chromium
+      # The config sets `forbidOnly`, one retry and a single worker when CI is
+      # set, and starts `npm run dev` itself. GitHub Actions exports CI=true.
+      - run: npm run test:e2e
+
+      # The HTML report is the only way to see *why* a browser test failed after
+      # the fact — it carries the trace recorded on the retry. Without this a
+      # red E2E step is a stack trace and nothing else.
+      - name: Upload Playwright report
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

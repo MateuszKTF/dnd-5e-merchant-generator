@@ -211,7 +211,7 @@ phase lands; before that, the gate is planned.
 | component / island tests | local + CI | required, since §3 Phase 1 | save-failure reporting regressions — the layer that had no automated check of any kind before |
 | coverage reporting | CI | report-only since §3 Phase 1; threshold after §3 Phase 4 | the lessons L-04 and L-05 class of failure: a green counter answering a different question than the one being asked |
 | quarantine ledger | local + CI | required, since §3 Phase 1 | a known defect being parked without being written down, or staying parked after it is fixed. **Extended 2026-09-14** to scan `tests/e2e/**` for `test.fail(` as well as `src/**` for `it.fails(` — otherwise an E2E park would go unrecorded while the count still looked truthful. Both counts are line-anchored, so a spec documenting its own convention in prose is not counted as a defect |
-| e2e (browser-level) | local + CI | required, since 2026-09-14 | the behaviours jsdom cannot exercise honestly (§6.2), plus the premises the other layers take on trust: real quota exhaustion, a hostile document at real page load, and the served client bundle. Runs `npm run test:e2e`; needs Chromium (`npx playwright install chromium`) and starts the dev server itself |
+| e2e (browser-level) | local + CI | required, since 2026-09-14 | the behaviours jsdom cannot exercise honestly (§6.2), plus the premises the other layers take on trust: real quota exhaustion and a hostile document at real page load. Wired into `ci.yml` as the last step, after every cheaper gate; caches the Chromium download, runs single-worker with one retry, and uploads the HTML report (with the retry trace) on failure. **Runs against `npm run dev`, not the built output** — see the caveat below |
 | lint warning budget | CI | required after §3 Phase 4 | `eslint .` carries no `--max-warnings`, so every warn-level rule — `no-console` among them — passes CI silently today |
 | `scripts/**` lint coverage | CI | required after §3 Phase 4 | `scripts/**` is hard-ignored by ESLint while still being type-checked, so the catalog build script is linted by nothing |
 | client-bundle dependency assertion | CI (post-build) | optional, after §3 Phase 4 | a `@supabase/*` import reaching the public client bundle. **Verified inert 2026-09-14**: nothing imports the packages, the env fields are `context: "server"` + `access: "secret"` (which Astro refuses to inline into client output), and the built `dist/client/` contains no match. The gate's real job is to assert that classification is *preserved*, not to catch a leak that exists |
@@ -219,6 +219,23 @@ phase lands; before that, the gate is planned.
 | deterministic viewport check | CI on PR | optional, after §3 Phase 5 | phone-readability regressions against the project's only NFR |
 | multimodal visual review | on demand | optional, after §3 Phase 5 | visual issues on one or two critical screens that a deterministic check misses |
 | build | CI | required | build-time breakage before promotion |
+
+**Caveat on the e2e gate: it exercises the dev server, not the artifact.**
+Playwright starts `npm run dev`, so what CI drives is Vite's unbundled module
+graph, not `dist/client/`. For persistence, the dialog, hostile documents,
+viewport and contrast this makes no difference — same React, same DOM, same
+browser. It matters for exactly one spec: `origin-boundary.spec.ts` asserts no
+third-party origin and no inlined credential, and asserting that about dev
+output is weaker than asserting it about what ships. **The static
+`dist/client/` check therefore remains the primary bundle gate**, unchanged;
+the spec is a second, served-side oracle, not a replacement.
+
+Closing the gap means serving the build in CI, and the adapter makes that
+non-trivial: `output: "server"` with `@astrojs/cloudflare` routes
+`astro preview` through wrangler. Since `index.astro` is prerendered, the
+cheaper route is a static server over `dist/client/` with the base URL pointed
+at it. Deferred rather than forgotten — it belongs with §3 Phase 4's bundle
+assertion, where the primary gate lives.
 
 Promotion to production remains human-only per AGENTS.md; these gates guard
 the merge, not the deploy.
