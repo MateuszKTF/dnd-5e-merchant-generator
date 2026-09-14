@@ -234,8 +234,21 @@ function conditionFromFailure(status: WriteFailure): StorageCondition | null {
       return null;
     case "not-found":
       // There is no transient record to promote, which means the auto-persist
-      // never landed — and that failure raised its own notice at the time.
-      return null;
+      // never landed. The old reasoning here was that the failure "raised its
+      // own notice at the time" — true whenever the persist *reported* failing,
+      // and false in the case that matters: a store that accepts a write and
+      // silently drops it, or another tab clearing site data between the
+      // re-persist and the promote. Then nothing was raised, nothing rendered,
+      // and the assistive announcement told the GM to read a message that was
+      // never shown.
+      //
+      // `unavailable` rather than a new condition because its copy is already
+      // exactly true here — the generator works, and merchants will not survive
+      // the tab closing. That is the GM's situation and their recovery is the
+      // same. This is not the `read-only`-reported-as-`unavailable` conflation
+      // that F2 was: there, the two had different fixes, so flattening them cost
+      // the GM the one they needed.
+      return "unavailable";
   }
 }
 

@@ -171,23 +171,26 @@ describe("Risk #1 — a write that did not land must not look like one that did"
   });
 
   /**
-   * QUARANTINED — live defect, owned by a follow-up change.
+   * The last Risk #1 defect, and the one that closed it.
    *
-   * Expected failure: the storage notice is empty. The GM is told
-   * "…zobacz komunikat o pamięci" ("see the storage message") by the assistive
-   * announcement, and no storage message is rendered, because `not-found` maps
-   * to `null` in `conditionFromFailure`.
+   * A store that accepts a write and drops it leaves the transient slot empty,
+   * so the promote answers `not-found`. That used to map to no condition at all:
+   * nothing rendered, while the assistive announcement told the GM to read a
+   * storage message that was never shown. Net visible change for a sighted GM
+   * was zero — the guardrail failing at the reporting layer rather than the
+   * storage layer.
    *
-   * `it.fails` rather than `it.skip` deliberately: a skipped test never executes
-   * and rots silently (lessons L-03). This one runs, stays green while the
-   * defect stands, and turns red the moment someone fixes it — which is how the
-   * entry gets retired instead of forgotten.
+   * Was parked here with `it.fails` and graduated the moment it was fixed, which
+   * is what that mechanism is for: a skipped test never executes and rots
+   * silently (lessons L-03), while a failing-on-purpose one turns red when the
+   * defect goes and forces its own retirement.
    *
-   * NOTE: an earlier draft of this test asserted only that the notice *text
-   * changed*, and passed. It measured a proxy rather than the requirement. The
-   * requirement is that an instruction the product gives the GM can be followed.
+   * NOTE: an earlier draft asserted only that the notice *text changed*, and
+   * passed while the defect stood. It measured a proxy. The requirement is that
+   * an instruction the product gives the GM can actually be followed — which is
+   * what the two assertions below say, in that order.
    */
-  it.fails("points the GM at a storage message that exists", async () => {
+  it("points the GM at a storage message that exists", async () => {
     const user = await generated();
 
     setItemSwallows();

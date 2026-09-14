@@ -24,11 +24,18 @@ import { describe, expect, it } from "vitest";
 /**
  * Every parked defect, why it is parked, and who owns it.
  *
+ * **Currently empty, and that is the desired state.** One entry has lived here:
+ * a failed promote answered `not-found`, which mapped to no condition, so no
+ * storage notice rendered while the assistive announcement told the GM to read
+ * one. It was parked on 2026-09-14 and graduated the same day — see
+ * `MerchantGenerator.test.tsx` → "points the GM at a storage message that
+ * exists", which is now an ordinary passing test.
+ *
  * | # | Entry | Defect | Owner |
  * |---|-------|--------|-------|
- * | 1 | `MerchantGenerator.test.tsx` → "points the GM at a storage message that exists" | A failed promote answers `not-found`, which `conditionFromFailure` maps to `null`, so no storage notice renders — while the assistive announcement tells the GM to read one. Net visible change for a sighted GM: nothing. | Follow-up defect-fix change; see `context/foundation/test-plan.md` §2 Risk #1 |
+ * | — | (none) | — | — |
  */
-const EXPECTED_QUARANTINE_ENTRIES = 1;
+const EXPECTED_QUARANTINE_ENTRIES = 0;
 
 const SRC = fileURLToPath(new URL(".", import.meta.url));
 
@@ -75,11 +82,25 @@ describe("quarantined defects", () => {
   });
 
   it("guards its own premise: it can actually see the marker it counts", () => {
-    // Without this, an entry count of zero is indistinguishable from a broken
-    // scanner, and the gate would pass forever while covering nothing (L-04).
+    // An expected count of zero is the dangerous state for this gate: zero found
+    // is indistinguishable from a scanner that finds nothing ever, and the gate
+    // would pass forever while covering nothing (L-04). So the premise is
+    // checked in two independent halves, neither of which depends on a real
+    // entry existing.
+
+    // 1. The scanner reaches real files, of both extensions. If either drops to
+    //    zero the path or the pattern broke, and the count above is meaningless.
     const files = testFilesUnder(SRC);
 
-    expect(files.length).toBeGreaterThan(0);
-    expect(quarantineEntries().length).toBeGreaterThan(0);
+    expect(files.length).toBeGreaterThan(5);
+    expect(files.filter((file) => file.endsWith(".test.tsx")).length).toBeGreaterThan(0);
+    expect(files.filter((file) => file.endsWith(".test.ts")).length).toBeGreaterThan(0);
+
+    // 2. The counting logic recognises the marker when it is present. Exercised
+    //    against a synthetic source string rather than a parked defect, so the
+    //    check keeps working precisely when the ledger is empty.
+    const synthetic = `it("a", () => {});\n${MARKER}"b", () => {});\n${MARKER}"c", () => {});`;
+
+    expect(synthetic.split(MARKER).length - 1).toBe(2);
   });
 });

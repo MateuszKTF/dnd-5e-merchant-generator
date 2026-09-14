@@ -105,13 +105,18 @@ orchestrator updates Status as artifacts appear on disk.
 | 4 | Quality-gates wiring | Make the floor mechanical, so scope is visible rather than assumed | cross-cutting (locks #1–#6) | coverage reporting, runner-scope gate, bundle assertion | not started | — |
 | 5 | Critical-screen phone verification | Prove the project's only NFR holds on the screen a GM actually uses at the table | #7 | deterministic viewport check, selective multimodal review | not started | — |
 
-**Phase 1 is `complete`; Risk #1 is not closed.** The phase shipped what it
-promised — the runner reaches `.tsx`, five Risk #1 behaviours are asserted, and
-four unrelated live defects were fixed along the way. One Risk #1 defect remains
-open and is parked in the quarantine ledger: a failed promote answers
-`not-found`, renders no notice, and leaves the assistive announcement pointing
-at a message that was never shown. `complete` here means the rollout phase
-finished, not that the risk it attacked is gone.
+**Phase 1 is `complete`, and Risk #1 is closed.** The phase shipped what it
+promised — the runner reaches `.tsx`, six Risk #1 behaviours are asserted, and
+four unrelated live defects were fixed along the way.
+
+The last Risk #1 defect was initially parked rather than fixed, on the grounds
+that it sat in a 1 735-line untested component and this was an infrastructure
+phase. It was then closed test-first in the same session: the parked
+`it.fails` entry was already a genuine RED, so GREEN was a one-branch change in
+`conditionFromFailure` and REFACTOR retired the entry. The quarantine ledger is
+now empty, which is its desired state. Scope note: this reversed the plan's
+"What We're NOT Doing" line on island-layer defects, deliberately and with the
+owner's agreement.
 
 Ordering rationale: Phase 1 is a structural blocker, not a preference —
 lessons L-05 establishes that the runner currently cannot load `.tsx` at
@@ -232,7 +237,13 @@ the relevant rollout phase ships; before that, the sub-section reads
   retired rather than forgotten.
 - **Ledger**: every entry is listed in `src/quarantine.test.ts` with its defect
   and its owning change, and the count is pinned there. Adding one means
-  editing that number deliberately.
+  editing that number deliberately. The ledger is currently **empty** — the one
+  entry it has ever held was parked and graduated the same day, which is the
+  lifecycle it is built for.
+- **The ledger's own premise-guard must not depend on an entry existing.** Zero
+  found is otherwise indistinguishable from a scanner that finds nothing ever —
+  the L-04 shape. It checks the scan reaches files of both extensions, and
+  exercises the counting logic against a synthetic string.
 - **Write the assertion for the requirement, then park it.** Never weaken an
   assertion so it passes against the defect.
 
