@@ -160,16 +160,24 @@ The written foundation this project was built from lives in `context/`:
 
 `AGENTS.md` and `CLAUDE.md` carry the working rules for AI agents in this repository.
 
-## Item data and licence
+## Licence
 
-The item catalog is derived from the **System Reference Document 5.1** by Wizards of the
-Coast LLC, used under the
+This project's own source code is licensed under the **MIT License** — see
+[`LICENSE`](LICENSE).
+
+The game data it builds on is not, and cannot be, covered by that. The item catalog in
+`src/data/items.generated.ts` is derived from the **System Reference Document 5.1** by
+Wizards of the Coast LLC, used under the
 [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/legalcode).
+That material stays under CC-BY-4.0, and its attribution requirement travels with any copy
+or derivative of this repository — the notice is reproduced in `LICENSE`, and in the page
+footer where the catalog is actually shown.
+
 Prices, rarity tiers and merchant categories are this project's own editorial work rather
 than the SRD's. The full list of modifications is in
-[`src/data/ATTRIBUTION.md`](src/data/ATTRIBUTION.md).
+[`src/data/ATTRIBUTION.md`](src/data/ATTRIBUTION.md), which also records what is
+deliberately **not** used: nothing from the published rulebooks outside the SRD, since this
+repository is public and that material is not freely licensed.
 
 `src/data/items.generated.ts` is produced by `scripts/build-item-catalog.mjs` — regenerate
 it with `npm run data:build` rather than editing it by hand.
-
-No licence has been declared for this project's own source code.
