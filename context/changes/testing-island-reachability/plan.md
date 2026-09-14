@@ -750,13 +750,13 @@ runtime surprise. No storage schema change, so the forward-only rule is not enga
 
 #### Automated
 
-- [x] 3.1 Node floor consistent across `.nvmrc`, `engines`, and CI
-- [x] 3.2 Install completes with no peer warnings: `npm ci`
-- [x] 3.3 Node project reports exactly the Phase 2 test count: `npm test -- --project node`
-- [x] 3.4 Dom project runs the smoke test: `npm test -- --project dom`
-- [x] 3.5 Coverage reports `src/components/*.tsx` at 0% rather than omitting them
-- [x] 3.6 Type checking passes: `npm run typecheck`
-- [x] 3.7 Linting passes, including the new config and setup files: `npm run lint`
+- [x] 3.1 Node floor consistent across `.nvmrc`, `engines`, and CI — 5eaade2
+- [x] 3.2 Install completes with no peer warnings: `npm ci` — 5eaade2
+- [x] 3.3 Node project reports exactly the Phase 2 test count: `npm test -- --project node` — 5eaade2
+- [x] 3.4 Dom project runs the smoke test: `npm test -- --project dom` — 5eaade2
+- [x] 3.5 Coverage reports `src/components/*.tsx` at 0% rather than omitting them — 5eaade2
+- [x] 3.6 Type checking passes: `npm run typecheck` — 5eaade2
+- [x] 3.7 Linting passes, including the new config and setup files: `npm run lint` — 5eaade2
 
 #### Manual
 
@@ -768,11 +768,11 @@ runtime surprise. No storage schema change, so the forward-only rule is not enga
 
 #### Automated
 
-- [ ] 4.1 Four asserted behaviors pass: `npm test -- --project dom`
-- [ ] 4.2 Three quarantined entries pass as `it.fails()`, each failing for its documented reason
-- [ ] 4.3 The quarantine gate passes, and fails when a fourth entry is added
-- [ ] 4.4 Coverage for `src/components/MerchantGenerator.tsx` is above 0%
-- [ ] 4.5 Full suite, typecheck and lint pass
+- [x] 4.1 Four asserted behaviors pass: `npm test -- --project dom`
+- [x] 4.2 Three quarantined entries pass as `it.fails()`, each failing for its documented reason
+- [x] 4.3 The quarantine gate passes, and fails when a fourth entry is added
+- [x] 4.4 Coverage for `src/components/MerchantGenerator.tsx` is above 0%
+- [x] 4.5 Full suite, typecheck and lint pass
 
 #### Manual
 
