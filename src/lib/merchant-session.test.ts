@@ -662,3 +662,66 @@ describe("wouldLoseCorrections", () => {
     expect(wouldLoseCorrections(false, "m-saved")).toBe(false);
   });
 });
+
+describe("openedSavedIdFor on a document that was never salvaged", () => {
+  /**
+   * Oracle: AGENTS.md — "throw for a broken invariant, return a discriminated
+   * union for an expected failure". A hand-edited, truncated or foreign document
+   * is an expected failure, so this function owes the caller a normal value.
+   * Its sibling `restoreFromMerchant` already guards for exactly this reason.
+   *
+   * Regression this catches: `sameStoredWork` reaches into `.rows.length` and
+   * `Object.keys(.corrections)`. Without a guard those throw a `TypeError` out
+   * of `reopenEvent`, inside the mount effect, blanking the only page the
+   * product has. Both call sites happen to pass a salvaged document today;
+   * nothing in the types or the comments says they must.
+   *
+   * Fixtures are hand-written literals, never built by the serializer under
+   * test — a serializer-made fixture can only prove self-consistency.
+   */
+  type Document = Parameters<typeof openedSavedIdFor>[0];
+
+  const asDocument = (value: unknown): Document => value as Document;
+
+  it("returns null for a transient with no rows, instead of throwing", () => {
+    const doc = asDocument({
+      schemaVersion: 1,
+      transient: { id: "m-1", name: "Kowal", category: "bron", wealth: "typowa", createdAt: "x", savedAt: null },
+      saved: [{ id: "m-1", name: "Kowal", category: "bron", wealth: "typowa", createdAt: "x", savedAt: "y" }],
+    });
+
+    expect(() => openedSavedIdFor(doc)).not.toThrow();
+    expect(openedSavedIdFor(doc)).toBeNull();
+  });
+
+  it("returns null for a transient with no corrections, instead of throwing", () => {
+    // Reaches further in than the rows case: rows match, so without a guard the
+    // failure lands on `Object.keys(a.corrections)` rather than `.rows.length`.
+    const doc = asDocument({
+      schemaVersion: 1,
+      transient: { id: "m-1", rows: [] },
+      saved: [{ id: "m-1", rows: [] }],
+    });
+
+    expect(() => openedSavedIdFor(doc)).not.toThrow();
+    expect(openedSavedIdFor(doc)).toBeNull();
+  });
+
+  it("returns null when a malformed entry sits in saved beside the matching id", () => {
+    const doc = asDocument({
+      schemaVersion: 1,
+      transient: { id: "m-1", rows: [], corrections: {} },
+      saved: [null, 42, { id: "m-1" }],
+    });
+
+    expect(() => openedSavedIdFor(doc)).not.toThrow();
+    expect(openedSavedIdFor(doc)).toBeNull();
+  });
+
+  it("returns null when saved is not an array at all", () => {
+    const doc = asDocument({ schemaVersion: 1, transient: { id: "m-1", rows: [], corrections: {} }, saved: null });
+
+    expect(() => openedSavedIdFor(doc)).not.toThrow();
+    expect(openedSavedIdFor(doc)).toBeNull();
+  });
+});

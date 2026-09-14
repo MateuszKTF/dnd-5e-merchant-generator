@@ -539,3 +539,66 @@ describe("holdOrder", () => {
     expect(input.map((entry) => entry.id)).toEqual(before);
   });
 });
+
+describe("a merchant under a fallback category label is still findable", () => {
+  /**
+   * Oracle: FR-012 — "MG może wyszukać zapisanego kupca po nazwie" — and the
+   * US-02 acceptance criterion "Zapisanego kupca da się odnaleźć po nazwie, gdy
+   * lista urośnie". The promise is findability, not any particular normal form.
+   *
+   * Regression this catches: when this build no longer knows a category,
+   * `categoryLabelFor` falls back to the stored id — `przedmioty-magiczne` — and
+   * `matchesQuery` searches that label. A GM typing the words with a space finds
+   * nothing, because nobody types the hyphen. The merchant exists, displays, and
+   * is unreachable.
+   *
+   * Asserted through `filterMerchants`, which is what FR-012 actually promises.
+   * Asserting `normalizeForSearch`'s output string would mirror the
+   * implementation and pass for any normal form it happened to produce.
+   */
+  // `zwoje-i-ksiegi` is NOT in CATEGORIES — that is the whole point, and it has
+  // to be checked rather than assumed. A first draft of this block used
+  // `przedmioty-magiczne`, which IS a known category whose label already carries
+  // a space ("Przedmioty magiczne"), so every assertion passed against the
+  // unfixed code: the test never reached the fallback it claimed to cover.
+  // Compare `[[L-03]]` — a test that does not enter the path it names is green
+  // for free.
+  const scrolls = merchant({ id: "m-scroll", name: "Bez nazwy", category: asCategory("zwoje-i-ksiegi") });
+  const smith = merchant({ id: "m-smith", name: "Kuźnia u Borysa" });
+
+  it("guards its own premise: the fixture category really is unknown to this build", () => {
+    expect(CATEGORIES.map((entry) => entry.id)).not.toContain("zwoje-i-ksiegi");
+    expect(libraryRow(scrolls).categoryLabel).toBe("zwoje-i-ksiegi");
+  });
+
+  it("finds it when the GM types the fallback label as words", () => {
+    expect(filterMerchants([scrolls, smith], "zwoje i ksiegi").map((entry) => entry.id)).toEqual(["m-scroll"]);
+  });
+
+  it("still finds it when the GM types the hyphen", () => {
+    // The separator is a separator either way — neither spelling may win alone.
+    expect(filterMerchants([scrolls, smith], "zwoje-i-ksiegi").map((entry) => entry.id)).toEqual(["m-scroll"]);
+  });
+
+  it("finds it from a single word of a multi-part id", () => {
+    expect(filterMerchants([scrolls, smith], "ksiegi").map((entry) => entry.id)).toEqual(["m-scroll"]);
+  });
+
+  it("folds diacritics and separators together on a fallback label", () => {
+    // Both rules at once: a fallback id carrying `ł`, queried without it.
+    const hunting = merchant({ id: "m-hunt", name: "Bez nazwy", category: asCategory("towary-łowieckie") });
+
+    expect(filterMerchants([hunting], "towary lowieckie").map((entry) => entry.id)).toEqual(["m-hunt"]);
+  });
+
+  it("does not turn a separator into a wildcard", () => {
+    // The fix collapses separators; it must not make unrelated merchants match.
+    expect(filterMerchants([scrolls, smith], "zwoje kowalskie")).toEqual([]);
+  });
+
+  it("leaves a known category label matching as it did before", () => {
+    const magic = merchant({ id: "m-magic", name: "Bez nazwy", category: asCategory("przedmioty-magiczne") });
+
+    expect(filterMerchants([magic, smith], "przedmioty magiczne").map((entry) => entry.id)).toEqual(["m-magic"]);
+  });
+});

@@ -106,11 +106,18 @@ const MESSAGES: Record<StorageCondition, string> = {
  * permanent, so that is the worst possible moment to stop saying it.
  *
  * Everything else is **episodic**: it describes an attempt, not a state. A full
- * store, a disabled one, another tab replacing the merchant, a record deleted
- * underneath a rename — each may already be over, and the next write that lands
- * is proof. A banner telling the GM to free space *after* they freed it
+ * store, a disabled one — each may already be over, and the next write that
+ * lands is proof. A banner telling the GM to free space *after* they freed it
  * contradicts a success they can see, which teaches them to ignore the banner
  * that matters.
+ *
+ * `superseded` and `record-gone` read like attempts and are not. Applying the
+ * rule above decides both: a write that lands does not un-replace the
+ * corrections another tab overwrote, and does not un-delete the record a rename
+ * was aiming at. Both losses are still true afterwards, so clearing them on the
+ * next success is the same mistake as clearing `records-dropped` — and worse,
+ * because the GM's own next correction is the write that does it. See
+ * `storage-notice-policy.test.ts`, which asserts the rule rather than the list.
  */
 const STANDING: readonly StorageCondition[] = [
   "future-version",
@@ -123,6 +130,8 @@ const STANDING: readonly StorageCondition[] = [
   "write-refused",
   "quarantined",
   "records-dropped",
+  "superseded",
+  "record-gone",
 ];
 
 export function isStandingCondition(condition: StorageCondition): boolean {

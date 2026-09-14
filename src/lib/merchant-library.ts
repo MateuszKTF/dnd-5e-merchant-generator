@@ -319,6 +319,13 @@ export function normalizeForSearch(value: string): string {
       .replace(/[łŁ]/gu, "l")
       // After `toLowerCase` only the lowercase form survives, but both are listed:
       // this line is the rule, and it should read as the rule even out of order.
+      //
+      // Hyphens and underscores are word separators here, not characters. When a
+      // build no longer knows a category, `categoryLabelFor` falls back to the
+      // stored id — `przedmioty-magiczne` — and FR-012 promises the GM can find
+      // that merchant. Nobody types the hyphen. Both sides route through this
+      // function, so collapsing the separator keeps display and search agreeing.
+      .replace(/[-_]+/gu, " ")
       .replace(/\s+/gu, " ")
       .trim()
   );

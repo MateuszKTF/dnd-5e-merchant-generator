@@ -300,3 +300,58 @@ describe("newMerchantId", () => {
     });
   });
 });
+
+describe("toStoredCorrections drops an entry that corrects nothing", () => {
+  /**
+   * Oracle: the docblock on `toStoredCorrections` — "An entry that is present
+   * but empty is dropped for the same reason." The reason it names is that
+   * S-02's dirty detection reads "never touched" from the absence of a key.
+   *
+   * Regression this catches: a persisted `{}` adds a key that `isCorrected`
+   * reads as clean but `sameStoredWork` counts, so `openedSavedIdFor` reports a
+   * record as diverged from itself and stands the FR-006 discard guard down
+   * over the only copy of the GM's work.
+   *
+   * The assertions read the stored object's own keys. Round-tripping back
+   * through `fromStoredCorrections` would only prove the pair agrees with
+   * itself.
+   */
+  it("omits an entry with neither field, rather than storing an empty object", () => {
+    const stored = toStoredCorrections({ "srd-dagger": {} });
+
+    expect(Object.keys(stored)).toEqual([]);
+    expect(stored).toStrictEqual({});
+  });
+
+  it("omits an entry whose fields are present but undefined", () => {
+    // `noUncheckedIndexedAccess` is off and the UI type carries the hole, so an
+    // explicitly-undefined field is reachable from the overlay. `toStrictEqual`
+    // is load-bearing: `toEqual` would pass on a key whose value is undefined.
+    const stored = toStoredCorrections({
+      "srd-dagger": { quantity: undefined, priceGp: undefined },
+    });
+
+    expect(stored).toStrictEqual({});
+  });
+
+  it("keeps an entry that corrects one field and drops an empty sibling", () => {
+    const stored = toStoredCorrections({
+      "srd-dagger": {},
+      "srd-shield": { quantity: 3 },
+    });
+
+    expect(Object.keys(stored)).toEqual(["srd-shield"]);
+    expect(stored["srd-shield"]).toStrictEqual({ quantity: 3 });
+  });
+
+  it("keeps a correction to zero, which is a value and not an absence", () => {
+    // Guards the drop against being written with a falsy test.
+    const stored = toStoredCorrections({ "srd-shield": { quantity: 0 } });
+
+    expect(stored["srd-shield"]).toStrictEqual({ quantity: 0 });
+  });
+
+  it("drops the same way on the way back, so a round trip grows no keys", () => {
+    expect(fromStoredCorrections({ "srd-dagger": {} })).toStrictEqual({});
+  });
+});

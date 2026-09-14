@@ -306,6 +306,12 @@ export function toStoredCorrections(corrections: UiCorrections): StoredCorrectio
     if (correction.quantity !== undefined) entry.quantity = correction.quantity;
     if (correction.priceGp !== undefined) entry.priceGp = correction.priceGp;
 
+    // An entry that carries neither field is the "present but empty" case the
+    // docblock promises to drop. Persisting it would add a key that `isCorrected`
+    // reads as clean but `sameStoredWork` counts, so `openedSavedIdFor` would
+    // report a record as diverged from itself and stand the FR-006 guard down.
+    if (entry.quantity === undefined && entry.priceGp === undefined) continue;
+
     stored[itemId] = entry;
   }
 
@@ -331,6 +337,11 @@ export function fromStoredCorrections(stored: StoredCorrections): UiCorrections 
     const correction: { quantity?: number; priceGp?: number } = {};
     if (entry.quantity !== undefined) correction.quantity = entry.quantity;
     if (entry.priceGp !== undefined) correction.priceGp = entry.priceGp;
+
+    // Mirrors the drop in {@link toStoredCorrections}. A newer build's entry
+    // whose every field this build discards must leave no key behind, or the
+    // round trip grows an overlay entry that means nothing.
+    if (correction.quantity === undefined && correction.priceGp === undefined) continue;
 
     corrections[itemId] = correction;
   }

@@ -394,7 +394,17 @@ export function openedSavedIdFor(doc: StorageDocument): string | null {
     return null;
   }
 
-  const record = doc.saved.find((merchant) => merchant.id === transient.id);
+  // Same guard as `restoreFromMerchant`, and for the same reason. `sameStoredWork`
+  // below reaches straight into `.rows.length` and `Object.keys(.corrections)`, so
+  // a hand-edited or foreign document would throw a `TypeError` out of a module
+  // whose contract is a normal value for an expected failure (AGENTS.md). The
+  // throw would land inside the mount effect, blanking the only page there is.
+  // Callers today happen to pass a salvaged document; nothing in the types says so.
+  if (!isMerchant(transient) || !Array.isArray(doc.saved)) {
+    return null;
+  }
+
+  const record = doc.saved.find((merchant) => isMerchant(merchant) && merchant.id === transient.id);
   if (record === undefined) {
     return null;
   }
