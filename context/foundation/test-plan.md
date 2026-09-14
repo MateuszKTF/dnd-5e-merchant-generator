@@ -153,8 +153,16 @@ reach — but in every case that residue is a *slice*, never the phase:
 
 Two findings worth carrying (both in §6.6):
 
-- The horizontal-scroll risk did **not** reproduce — the footer fits at 320px.
-  The test stands as a regression guard, verified by deliberate break.
+- The horizontal-scroll risk **does** reproduce, and Phase 1 research was right
+  that it is the footer. An earlier line here said it did not; that was a
+  Windows-only measurement. CI’s first run found the document at 349px inside a
+  320px viewport on Linux, where wider fonts push the bare CC-BY URL — a single
+  unbreakable token — past the 288px footer content box. Fixed with
+  `break-words`. Two lessons: a viewport assertion is only as good as the font
+  stack it runs on, so this NFR is a CI gate rather than a local one; and the
+  test’s own diagnostic reported no offending element, because overflowing
+  inline text does not grow its parent’s border box — a bounding-rect sweep
+  cannot see it, and it now compares scrollWidth to clientWidth too.
 - Phase 1 research read the focus ring off the stylesheet as "roughly 1.3:1".
   Measured from painted pixels it is 1.06:1, and the cause is not a low-contrast
   ring but a ring that does not paint at all.
