@@ -13,7 +13,9 @@ import {
   newMerchantId,
   toStoredCorrections,
   toStoredRows,
+  type StoredCorrection,
   type StoredRow,
+  type UiCorrection,
   type UiRow,
 } from "./merchant";
 
@@ -353,5 +355,38 @@ describe("toStoredCorrections drops an entry that corrects nothing", () => {
 
   it("drops the same way on the way back, so a round trip grows no keys", () => {
     expect(fromStoredCorrections({ "srd-dagger": {} })).toStrictEqual({});
+  });
+});
+
+/**
+ * The same guard, for the correction types — the half that was only prose.
+ *
+ * Oracle: the `UiCorrection` docblock claims "Same reasoning as {@link UiRow}".
+ * `UiRow`'s correspondence to `AssortmentRow` is enforced above by
+ * `MutuallyAssignable` and `SameKeys`; the correction types claimed the same
+ * relationship and had nothing enforcing it. One of the two statements was
+ * doing real work and the other was a comment.
+ *
+ * Regression this catches: add a third correctable field — a note, a flag —
+ * to one side. Everything compiles, the UI renders it, and
+ * `toStoredCorrections` / `fromStoredCorrections` drop it on every save,
+ * because both carry hardcoded field lists. The GM's work disappears with no
+ * error anywhere.
+ *
+ * **`npm test` cannot see any of this.** Vitest transpiles without
+ * type-checking, exactly as the block above warns. The check is `npm run
+ * typecheck` (`astro check`), which CI runs *before* `npm test` — if that order
+ * is ever flipped, this assertion silently stops being checked.
+ */
+const storedCorrectionMatchesUi: MutuallyAssignable<StoredCorrection, UiCorrection> = true;
+const storedCorrectionKeysMatchUi: SameKeys<StoredCorrection, UiCorrection> = true;
+
+describe("stored and UI correction types correspond", () => {
+  it("is checked by the compiler, not by this assertion", () => {
+    // These two consts are the check. This `it` exists so the file reports the
+    // guard as a named case; it cannot fail at runtime, and saying so is the
+    // point — see the block above.
+    expect(storedCorrectionMatchesUi).toBe(true);
+    expect(storedCorrectionKeysMatchUi).toBe(true);
   });
 });

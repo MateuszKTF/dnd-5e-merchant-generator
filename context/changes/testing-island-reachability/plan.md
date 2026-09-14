@@ -720,11 +720,11 @@ runtime surprise. No storage schema change, so the forward-only rule is not enga
 
 #### Automated
 
-- [x] 1.1 Each of the four new tests fails before its fix, for the reason named in its sub-phase
-- [x] 1.2 Full suite passes: `npm test`
-- [x] 1.3 Type checking passes: `npm run typecheck`
-- [x] 1.4 Linting passes: `npm run lint`
-- [x] 1.5 Test count increased from 368 by the number of tests added
+- [x] 1.1 Each of the four new tests fails before its fix, for the reason named in its sub-phase — 157f5b4
+- [x] 1.2 Full suite passes: `npm test` — 157f5b4
+- [x] 1.3 Type checking passes: `npm run typecheck` — 157f5b4
+- [x] 1.4 Linting passes: `npm run lint` — 157f5b4
+- [x] 1.5 Test count increased from 368 by the number of tests added — 157f5b4
 
 #### Manual
 
@@ -735,11 +735,11 @@ runtime surprise. No storage schema change, so the forward-only rule is not enga
 
 #### Automated
 
-- [ ] 2.1 All four pass on first run without any production change: `npm test`
-- [ ] 2.2 Type checking passes: `npm run typecheck`
-- [ ] 2.3 Bumping `SCHEMA_VERSION` to 2 locally leaves the frozen fixture describing v1
-- [ ] 2.4 Reverting the `writeDocument` latch check to self-clearing fails the new test
-- [ ] 2.5 Linting passes: `npm run lint`
+- [x] 2.1 All four pass on first run without any production change: `npm test`
+- [x] 2.2 Type checking passes: `npm run typecheck`
+- [x] 2.3 Bumping `SCHEMA_VERSION` to 2 locally leaves the frozen fixture describing v1
+- [x] 2.4 Reverting the `writeDocument` latch check to self-clearing fails the new test
+- [x] 2.5 Linting passes: `npm run lint`
 
 #### Manual
 

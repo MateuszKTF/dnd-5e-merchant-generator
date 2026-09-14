@@ -50,6 +50,14 @@ export interface StorageFakeOptions {
    * even reading is refused rather than returning `null`.
    */
   readonly throwOnGet?: KeyRule;
+  /**
+   * Keys whose `removeItem` throws, i.e. a store that accepts a write and then
+   * refuses to take it back. `probeWritable` writes a probe key and removes it
+   * again inside one `try`, so without this option the cleanup half of that
+   * probe is unreachable from any test and the module's "unavailable" answer
+   * for such a store is a promise nothing checks.
+   */
+  readonly throwOnRemove?: KeyRule;
 }
 
 function matches(key: string, rule: KeyRule | undefined): boolean {
@@ -100,6 +108,10 @@ export function createStorageFake(options: StorageFakeOptions = {}): StorageFake
     },
 
     removeItem(key) {
+      if (matches(key, options.throwOnRemove)) {
+        throw new DOMException(`Removal of "${key}" refused`, "SecurityError");
+      }
+
       entries.delete(key);
     },
   };

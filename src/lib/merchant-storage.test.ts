@@ -847,3 +847,114 @@ describe("newer schema version", () => {
     expect(putTransient(makeMerchant(), current)).toEqual({ status: "ok" });
   });
 });
+
+describe("the read-only latch holds across repeated writeDocument calls", () => {
+  beforeEach(() => {
+    resetReadOnlyLatch();
+  });
+
+  /**
+   * Oracle: the `writeDocument` docblock — "It still honours the read-only
+   * latch." A promise pinned for the first call only is not pinned.
+   *
+   * Regression this catches: the prior audit planted a mutant that made the
+   * latch check self-clearing (refuse once, then forget) and the whole suite
+   * stayed green. The one existing test that reaches this check calls
+   * `writeDocument` a single time, so refusing-then-forgetting is
+   * indistinguishable from refusing-always.
+   *
+   * The second call deliberately has **no intervening `readDocument`**. A read
+   * in between would re-derive the refusal from `loadForWrite`'s own status
+   * mapping, which proves that path works and says nothing about the latch.
+   */
+  function latchViaFutureVersion(): StorageFake {
+    const store = createStorageFake({
+      seed: { [STORAGE_KEY]: JSON.stringify({ schemaVersion: SCHEMA_VERSION + 1, transient: null, saved: [] }) },
+    });
+    const read = readDocument(store);
+    expect(read.status).toBe("future-version");
+
+    return store;
+  }
+
+  const document = (): StorageDocument => ({ schemaVersion: SCHEMA_VERSION, transient: null, saved: [] });
+
+  it("refuses the second write as well as the first", () => {
+    latchViaFutureVersion();
+    const clean = createStorageFake();
+
+    expect(writeDocument(document(), clean).status).toBe("read-only");
+    // No read in between: this is the assertion the single-call test cannot make.
+    expect(writeDocument(document(), clean).status).toBe("read-only");
+  });
+
+  it("refuses a third write, and leaves the store untouched throughout", () => {
+    latchViaFutureVersion();
+    const clean = createStorageFake();
+
+    writeDocument(document(), clean);
+    writeDocument(document(), clean);
+
+    expect(writeDocument(document(), clean).status).toBe("read-only");
+    // The latch is worthless if it reports refusal and writes anyway.
+    expect(clean.entries.size).toBe(0);
+  });
+
+  it("carries across store objects, because the latch is module state", () => {
+    latchViaFutureVersion();
+
+    expect(writeDocument(document(), createStorageFake()).status).toBe("read-only");
+    expect(writeDocument(document(), createStorageFake()).status).toBe("read-only");
+  });
+});
+
+describe("probeWritable on a store that refuses removal", () => {
+  beforeEach(() => {
+    resetReadOnlyLatch();
+  });
+
+  /**
+   * Oracle: the `probeWritable` docblock — writability is "answered by actually
+   * writing", and `"full"` is separate from `"unavailable"` because a full store
+   * is still readable. A store that accepts the probe write and then refuses to
+   * take it back is not writable in any useful sense, and the error is not a
+   * quota error, so it must land on `unavailable`.
+   *
+   * This branch existed and was unreachable from any test until
+   * `throwOnRemove` was added to the fake: the probe's `removeItem` sits inside
+   * the same `try` as its `setItem`, and nothing could make it throw.
+   */
+  it("treats a store whose removeItem throws as unavailable, not writable", () => {
+    const store = createStorageFake({ throwOnRemove: true });
+
+    // An empty store: the read has to fall through to the writability probe to
+    // decide between `empty` and `unavailable`.
+    expect(readDocument(store).status).toBe("unavailable");
+  });
+
+  it("does not misreport it as a full store", () => {
+    // `full` would be wrong twice over: the write succeeded, and the failure was
+    // a SecurityError rather than a quota error. A `full` answer would send the
+    // GM to free space that is not the problem.
+    const store = createStorageFake({ throwOnRemove: true });
+
+    expect(putTransient(makeMerchant(), store).status).not.toBe("quota-exceeded");
+  });
+
+  it("still reads a document that is sitting right there", () => {
+    // The reason `full` and `unavailable` are separate at all: a store we cannot
+    // write to may still hold merchants, and refusing to read would lose them.
+    const seeded = createStorageFake({
+      throwOnRemove: true,
+      seed: {
+        [STORAGE_KEY]: JSON.stringify({ schemaVersion: SCHEMA_VERSION, transient: null, saved: [makeMerchant()] }),
+      },
+    });
+
+    const read = readDocument(seeded);
+
+    expect(read.status).toBe("read-only");
+    if (read.status !== "read-only") return;
+    expect(read.doc.saved).toHaveLength(1);
+  });
+});
