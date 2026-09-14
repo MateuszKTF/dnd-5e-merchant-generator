@@ -784,9 +784,9 @@ runtime surprise. No storage schema change, so the forward-only rule is not enga
 
 #### Automated
 
-- [x] 5.1 `test-plan.md` §3 row 1 reads `complete`
-- [x] 5.2 No `file:line` anchor appears anywhere in §2
-- [x] 5.3 Markdown formatting passes: `npm run lint`
+- [x] 5.1 `test-plan.md` §3 row 1 reads `complete` — 93630d8
+- [x] 5.2 No `file:line` anchor appears anywhere in §2 — 93630d8
+- [x] 5.3 Markdown formatting passes: `npm run lint` — 93630d8
 
 #### Manual
 
