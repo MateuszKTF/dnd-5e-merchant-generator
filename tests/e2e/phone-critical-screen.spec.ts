@@ -31,17 +31,40 @@ test("the merchant screen does not scroll sideways on a 320px phone", async ({ p
 
   const overflow = await page.evaluate(() => {
     const limit = document.documentElement.clientWidth;
-    const offenders: { tag: string; text: string; right: number }[] = [];
+    const offenders: { tag: string; reason: string; text: string; by: number }[] = [];
 
     for (const element of document.querySelectorAll("body *")) {
       const rect = element.getBoundingClientRect();
       if (rect.width === 0 && rect.height === 0) continue;
-      // Half a pixel of slack: sub-pixel layout rounding is not sideways scroll.
+      const describe = (): string => element.textContent.trim().slice(0, 60);
+
+      // (a) The box itself sticks out. Half a pixel of slack, because sub-pixel
+      //     layout rounding is not sideways scroll.
       if (rect.right > limit + 0.5 || rect.left < -0.5) {
         offenders.push({
           tag: element.tagName.toLowerCase(),
-          text: element.textContent.trim().slice(0, 60),
-          right: Math.round(rect.right),
+          reason: "box extends past the viewport",
+          text: describe(),
+          by: Math.round(rect.right - limit),
+        });
+        continue;
+      }
+
+      // (b) The box fits but its *content* does not. This is the case that
+      //     actually bites here and the one a bounding-rect check cannot see:
+      //     overflowing inline text does not grow its parent's border box, so
+      //     an unbreakable 292px URL inside a 288px paragraph leaves every
+      //     rect looking correct while the document scrolls sideways. Skipping
+      //     deliberately scrollable boxes keeps a table with its own
+      //     `overflow-x: auto` from being reported as a page-level defect.
+      const style = window.getComputedStyle(element);
+      if (style.overflowX !== "visible") continue;
+      if (element.scrollWidth > element.clientWidth + 1) {
+        offenders.push({
+          tag: element.tagName.toLowerCase(),
+          reason: "content is wider than the element",
+          text: describe(),
+          by: element.scrollWidth - element.clientWidth,
         });
       }
     }
@@ -54,14 +77,18 @@ test("the merchant screen does not scroll sideways on a 320px phone", async ({ p
     };
   });
 
-  // The user-visible outcome: no horizontal scrollbar.
-  expect(overflow.documentWidth, `document is wider than the 320px viewport`).toBeLessThanOrEqual(
+  // Diagnostic first, on purpose. Both assertions describe the same defect, but
+  // this one names the element and the aggregate below only says "too wide" —
+  // and whichever fails first is all CI prints. Asserting the width first is
+  // exactly how the real footer regression reached this suite as an
+  // unactionable "Expected <= 320, Received 349".
+  expect(overflow.offenders, "elements whose content escapes the viewport").toEqual([]);
+
+  // The user-visible outcome: no horizontal scrollbar. Kept as a backstop for
+  // any overflow the per-element sweep above fails to attribute.
+  expect(overflow.documentWidth, "document is wider than the 320px viewport").toBeLessThanOrEqual(
     overflow.viewportWidth,
   );
-
-  // And the diagnostic half — names the element, so a failure is actionable
-  // rather than just "something is too wide".
-  expect(overflow.offenders, "elements extending past the viewport").toEqual([]);
 });
 
 /**
