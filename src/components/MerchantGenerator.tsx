@@ -1637,7 +1637,23 @@ export default function MerchantGenerator() {
           </select>
         </div>
 
-        <Button onClick={handleGenerate} className="h-11 px-6">
+        {/* The focus ring is stated here because the shared `Button` does not
+            paint one. Its base sets `outline-none` and substitutes
+            `focus-visible:ring-ring/50 focus-visible:ring-[3px]`, and that ring
+            resolves to a transparent shadow with no spread — so a GM tabbing to
+            the primary action of the whole product got a 1.2:1 change against
+            the 3:1 floor AGENTS.md sets, which is to say none they could see.
+            `outline-solid` is the part that matters: `outline-2` alone only
+            sets a width, and a width on `outline-style: none` paints nothing —
+            which is why a computed style reports a ring for a button that has
+            none, and why this is asserted from painted pixels in
+            `tests/e2e/critical-screen-focus.spec.ts` rather than from CSS.
+            Colour and geometry match `#merchant-library-toggle`, so the two
+            focus rings read as one system. */}
+        <Button
+          onClick={handleGenerate}
+          className="h-11 px-6 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-neutral-800 focus-visible:outline-solid"
+        >
           Stwórz
         </Button>
 

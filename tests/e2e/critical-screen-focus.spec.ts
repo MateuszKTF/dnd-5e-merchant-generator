@@ -21,27 +21,22 @@ const CONTRAST_FLOOR = 3;
 
 test.describe("Risk #7 — keyboard focus is visible", () => {
   /**
-   * PARKED — see the ledger in `src/quarantine.test.ts`.
+   * Graduated from the quarantine ledger on 2026-09-14, the same day it was
+   * parked — the lifecycle §6.3 is built for.
    *
-   * Defect: the primary action "Stwórz" paints no usable focus indicator. The
-   * shadcn button base sets `outline-none` and replaces the UA ring with
-   * `focus-visible:ring-ring/50 focus-visible:ring-[3px]`; the ring resolves to
-   * a transparent shadow with no spread, so keyboard focus changes almost
-   * nothing on screen. Measured at **1.06:1** against a 3:1 floor — the GM
-   * tabbing to the generate button cannot tell they are on it.
+   * The defect: "Stwórz" painted no focus indicator a GM could see. The shadcn
+   * button base sets `outline-none` and substitutes
+   * `focus-visible:ring-ring/50 focus-visible:ring-[3px]`, which resolves to a
+   * transparent shadow with no spread — 1.2:1 against a 3:1 floor. The fix
+   * states the outline at the call site; see the comment there for why
+   * `outline-solid` is the part that matters.
    *
-   * This is the same finding Phase 1 research recorded as "roughly 1.3:1",
-   * confirmed here by measurement rather than by reading the stylesheet.
-   *
-   * The assertion below is written for the requirement and then parked, never
-   * weakened to pass: `test.fail()` runs it and keeps the suite green while the
-   * defect stands, and turns red the moment someone fixes it — at which point
-   * this entry is retired and the ledger count goes back down.
-   *
-   * Fix belongs with the accessibility-scope correction in test plan §3 Phase 4,
-   * which is where the inert a11y gate is repaired.
+   * Kept as an ordinary test rather than deleted: it is now the regression
+   * guard for a control whose focus ring comes from a component the project
+   * treats as upstream, so a future `Button` change can silently take it away
+   * again.
    */
-  test.fail("the primary action shows a focus indicator meeting the 3:1 floor", async ({ page }) => {
+  test("the primary action shows a focus indicator meeting the 3:1 floor", async ({ page }) => {
     await gotoHydrated(page);
 
     const contrast = await focusIndicatorContrast(page, page.getByRole("button", { name: "Stwórz" }));

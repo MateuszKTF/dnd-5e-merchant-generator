@@ -42,8 +42,46 @@ export async function focusIndicatorContrast(page: Page, control: Locator): Prom
     height: Math.round(box.height + margin * 2),
   };
 
+  /**
+   * Screenshot the clip once the pixels inside it have stopped changing.
+   *
+   * Every control here is a shadcn `Button`, whose base class list includes
+   * `transition-all` — so the focus indicator does not appear, it *animates*
+   * in. A screenshot taken the moment after `focus()` therefore catches a
+   * half-transitioned frame and reports a contrast somewhere between "no
+   * indicator" and the real one. That is a genuinely flaky measurement: it was
+   * caught here failing on the first attempt and passing on the retry, which is
+   * the worst possible behaviour for an assertion people are meant to trust.
+   *
+   * Waiting for two identical consecutive frames settles it without hard-coding
+   * a duration — it is the same "wait for state, not time" rule the rest of the
+   * suite follows, applied to paint. A fixed `waitForTimeout` here would be
+   * both slower and still wrong on a slower machine.
+   */
+  const settledShot = async (): Promise<string> => {
+    let previous = "";
+    for (let attempt = 0; attempt < 20; attempt++) {
+      // Two animation frames guarantee the compositor has produced a frame for
+      // whatever style change is in flight.
+      await page.evaluate(
+        async () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                resolve();
+              });
+            });
+          }),
+      );
+      const shot = (await page.screenshot({ clip })).toString("base64");
+      if (shot === previous) return shot;
+      previous = shot;
+    }
+    throw new Error("the control never stopped animating, so it cannot be measured");
+  };
+
   await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
-  const unfocused = (await page.screenshot({ clip })).toString("base64");
+  const unfocused = await settledShot();
 
   await control.focus();
   const isFocusVisible = await control.evaluate((el) => el.matches(":focus-visible"));
@@ -52,7 +90,7 @@ export async function focusIndicatorContrast(page: Page, control: Locator): Prom
     // never apply, so a low reading would say nothing about the indicator.
     throw new Error("control did not enter :focus-visible, so no focus styling was exercised");
   }
-  const focused = (await page.screenshot({ clip })).toString("base64");
+  const focused = await settledShot();
 
   return page.evaluate(
     async ([a, b]) => {

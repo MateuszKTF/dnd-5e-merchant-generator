@@ -24,18 +24,25 @@ import { describe, expect, it } from "vitest";
 /**
  * Every parked defect, why it is parked, and who owns it.
  *
- * One entry has previously lived here and graduated: a failed promote answered
- * `not-found`, which mapped to no condition, so no storage notice rendered
- * while the assistive announcement told the GM to read one. It was parked on
- * 2026-09-14 and fixed the same day — see `MerchantGenerator.test.tsx` →
- * "points the GM at a storage message that exists", now an ordinary passing
- * test.
+ * **Currently empty, and that is the desired state.** Two entries have lived
+ * here, and both graduated the day they were parked — which is the lifecycle
+ * this file is built for, not an accident:
+ *
+ * 1. A failed promote answered `not-found`, which mapped to no condition, so no
+ *    storage notice rendered while the assistive announcement told the GM to
+ *    read one. Parked 2026-09-14, fixed the same day — now an ordinary passing
+ *    test in `MerchantGenerator.test.tsx`.
+ * 2. The primary "Stwórz" button painted no keyboard focus indicator a GM could
+ *    see: the shadcn button base sets `outline-none` and substitutes a ring
+ *    that resolves to a transparent shadow, measuring 1.2:1 against the 3:1
+ *    floor. Parked 2026-09-14, fixed the same day — now an ordinary passing
+ *    test in `tests/e2e/critical-screen-focus.spec.ts`.
  *
  * | # | Entry | Defect | Owner |
  * |---|-------|--------|-------|
- * | 1 | `tests/e2e/critical-screen-focus.spec.ts` → "the primary action shows a focus indicator meeting the 3:1 floor" | The primary "Stwórz" button paints no usable keyboard focus indicator. The shadcn button base sets `outline-none` and substitutes `focus-visible:ring-ring/50 focus-visible:ring-[3px]`, which resolves to a transparent shadow with no spread. Measured at 1.06:1 against the 3:1 floor AGENTS.md sets. | test plan §3 Phase 4 (accessibility scope correction) |
+ * | — | (none) | — | — |
  */
-const EXPECTED_QUARANTINE_ENTRIES = 1;
+const EXPECTED_QUARANTINE_ENTRIES = 0;
 
 const SRC = fileURLToPath(new URL(".", import.meta.url));
 

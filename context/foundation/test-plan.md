@@ -103,7 +103,7 @@ orchestrator updates Status as artifacts appear on disk.
 | 2 | Persistence round-trip and lifecycle | Prove work survives a tab close, edits survive a round-trip, and promotion mints exactly one entry | #2, #3, #4 | integration round-trip, unit, mechanical invariant assertions | browser slice done; core not started | — |
 | 3 | Hostile input and schema-version resilience | Prove garbage and older documents degrade explicitly rather than silently | #5, #6 | unit with hostile and frozen per-version fixtures | browser slice done; unit core not started | — |
 | 4 | Quality-gates wiring | Make the floor mechanical, so scope is visible rather than assumed | cross-cutting (locks #1–#6) | coverage reporting, runner-scope gate, bundle assertion | bundle boundary asserted; gates not wired | — |
-| 5 | Critical-screen phone verification | Prove the project's only NFR holds on the screen a GM actually uses at the table | #7 | deterministic viewport check, selective multimodal review | automated checks done; one defect parked | — |
+| 5 | Critical-screen phone verification | Prove the project's only NFR holds on the screen a GM actually uses at the table | #7 | deterministic viewport check, selective multimodal review | automated checks done; both defects fixed | — |
 
 **Phase 1 is `complete`, and Risk #1 is closed.** The phase shipped what it
 promised — the runner reaches `.tsx`, six Risk #1 behaviours are asserted, and
@@ -147,9 +147,16 @@ reach — but in every case that residue is a *slice*, never the phase:
   work and still not started.
 - **Phase 5** — the deterministic half is done: no horizontal scroll at 320px,
   and the 44px tap floor, both regression-guarded. The multimodal review is not
-  done. **One defect is parked**: the primary "Stwórz" button paints no usable
-  keyboard focus indicator — measured at **1.06:1** against the 3:1 floor. See
-  the quarantine ledger; the fix belongs to Phase 4's a11y correction.
+  done. **Both defects it found are now fixed**: the footer horizontal scroll
+  (see below), and the primary "Stwórz" button, which painted no keyboard focus
+  indicator a GM could see — 1.2:1 against the 3:1 floor. The button's outline
+  is now stated at the call site and the quarantine ledger is empty again.
+  **Three sibling controls remain below the floor** — `Zapisz` (1.34:1) and the
+  dialog's `Anuluj` (1.12:1) and `Stwórz mimo to` (1.18:1). They share the same
+  cause, a shadcn `Button` base that sets `outline-none` and substitutes a ring
+  resolving to a transparent shadow, so one line in `src/components/ui/button.tsx`
+  would fix all three — but that file is upstream code §7 excludes, and forking
+  it is a decision for Phase 4's a11y correction rather than a side effect here.
 
 Two findings worth carrying (both in §6.6):
 
@@ -164,8 +171,10 @@ Two findings worth carrying (both in §6.6):
   inline text does not grow its parent’s border box — a bounding-rect sweep
   cannot see it, and it now compares scrollWidth to clientWidth too.
 - Phase 1 research read the focus ring off the stylesheet as "roughly 1.3:1".
-  Measured from painted pixels it is 1.06:1, and the cause is not a low-contrast
-  ring but a ring that does not paint at all.
+  Measured from painted pixels it is 1.2:1, and the cause is not a low-contrast
+  ring but a ring that does not paint at all — `outline-none` plus a ring that
+  resolves to a transparent shadow. Fixed on the primary button; three siblings
+  sharing the shadcn base still carry it.
 
 Ordering rationale: Phase 1 is a structural blocker, not a preference —
 lessons L-05 establishes that the runner currently cannot load `.tsx` at
